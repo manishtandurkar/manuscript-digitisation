@@ -10,9 +10,11 @@ A pipeline to preprocess, enhance, binarise, OCR, and assemble structured resear
 - Project summary
 - Scope & phases
 - Implementation progress
+- Sample image
 - Quick start (Windows)
 - Folder structure
 - Installation
+- **Datasets** ← NEW
 - Model weights & Tesseract
 - Usage examples
 - Pipeline stages overview
@@ -396,6 +398,200 @@ foreach ($url in $urls) {
   Invoke-WebRequest -Uri $url -OutFile "models\weights\$filename"
 }
 ```
+
+---
+
+## Datasets
+
+This section details the datasets used for development, training, and testing. All datasets are **optional for basic testing** but highly recommended for full evaluation and model training.
+
+### Why Datasets?
+
+- **Development:** Test the pipeline on diverse artefact types (stone, palm leaf, copper, paper, cave)
+- **Validation:** Measure OCR accuracy against ground-truth transcriptions
+- **Training:** Fine-tune models for improved performance on specific scripts
+- **Benchmarking:** Compare pipeline performance against baselines
+
+### Primary Datasets (Recommended)
+
+| Dataset | Contents | Script | Size | Access | Notes |
+|---------|----------|--------|------|--------|-------|
+| **Ancient Tamil Stone Inscriptions** | Real stone inscriptions with LiDAR/3D models | Tamil | ~500 images | [Kaggle](https://www.kaggle.com/datasets/athiraishanmugam/ancient-tamil-stone-inscriptions) | Start here; includes 3D point cloud data |
+| **Tamil Handwritten Palm Leaf (THPLMD)** | Deteriorated palm leaf samples with binarised ground truth | Tamil | 262 images | [PMC/ScienceDirect](https://www.ncbi.nlm.nih.gov/pmc/) | Excellent for binarisation testing |
+| **Tamil Handwritten Character Corpus** | Individual characters across different centuries | Tamil | ~5000 chars | [Mendeley](https://data.mendeley.com/datasets/6zcpgchvmx/1) | Good for OCR confidence evaluation |
+
+### Secondary Datasets
+
+| Dataset | Contents | Script(s) | Access | Use Case |
+|---------|----------|-----------|--------|----------|
+| **Indiscapes** | Layout annotations + bounding boxes for historical manuscripts | Indic (multi) | [IIIT Hyderabad](https://ihdia.iiit.ac.in) | Layout analysis & document segmentation |
+| **Sanskrit OCR Dataset** | Classical Sanskrit document images | Sanskrit (Devanagari) | [GitHub](https://github.com/ihdia/sanskrit-ocr) | Sanskrit transcription validation |
+| **Brahmi Character Dataset** | Ashokan Brahmi characters (258 classes, 1032 samples) | Brahmi | [arXiv](https://arxiv.org/abs/2501.01981) — contact authors | Brahmi script recognition (requires fine-tuning) |
+| **Kannada Inscriptions** | Leaf manuscripts & stone inscriptions from Hampi temples | Kannada | Kuvempu Institute of Kannada Studies | Regional script evaluation |
+
+### Institutional Archives (Free to Browse)
+
+These are public repositories where you can find additional images:
+
+| Source | URL | Content |
+|--------|-----|---------|
+| **Digital Library of India** | https://dli.ernet.in | 5M+ books, manuscripts, inscriptions |
+| **eGangotri** | https://egangotri.org | Sanskrit & Indic texts (2M+ pages) |
+| **IIIT Hyderabad IHDIA** | https://ihdia.iiit.ac.in | Historical document datasets |
+| **Archaeological Survey of India** | https://asi.nic.in | Official ASI records & publications |
+
+### Download & Setup Instructions
+
+#### Option 1: Use the provided download script
+
+Create a file `download_datasets.ps1` in the project root:
+
+```powershell
+# download_datasets.ps1 — Downloads primary datasets
+
+Write-Host "Creating data/raw subdirectories..."
+New-Item -ItemType Directory -Force -Path data\raw\tamil_stone | Out-Null
+New-Item -ItemType Directory -Force -Path data\raw\tamil_palm_leaf | Out-Null
+New-Item -ItemType Directory -Force -Path data\raw\tamil_characters | Out-Null
+
+Write-Host ""
+Write-Host "=== DATASET DOWNLOAD INSTRUCTIONS ==="
+Write-Host ""
+
+Write-Host "1. Kaggle Tamil Stone Inscriptions"
+Write-Host "   - Requires: Kaggle API (pip install kaggle)"
+Write-Host "   - Setup: Download kaggle.json from https://www.kaggle.com/settings/account"
+Write-Host "   - Place: ~/.kaggle/kaggle.json (Unix) or %USERPROFILE%\.kaggle\kaggle.json (Windows)"
+Write-Host "   - Run:"
+Write-Host "     kaggle datasets download athiraishanmugam/ancient-tamil-stone-inscriptions"
+Write-Host "     Expand-Archive ancient-tamil-stone-inscriptions.zip -DestinationPath data\raw\tamil_stone"
+Write-Host ""
+
+Write-Host "2. Tamil Handwritten Palm Leaf (THPLMD)"
+Write-Host "   - Requires: Manual download from PMC/ScienceDirect"
+Write-Host "   - Visit: https://www.ncbi.nlm.nih.gov/pmc/ (search 'THPLMD')"
+Write-Host "   - Extract to: data\raw\tamil_palm_leaf"
+Write-Host ""
+
+Write-Host "3. Tamil Handwritten Character Corpus"
+Write-Host "   - Requires: Manual download from Mendeley"
+Write-Host "   - Visit: https://data.mendeley.com/datasets/6zcpgchvmx/1"
+Write-Host "   - Extract to: data\raw\tamil_characters"
+Write-Host ""
+
+Write-Host "ALREADY INCLUDED:"
+Write-Host "   ✓ data\raw\tamil_stone\IMG_3941.jpg (sample test image)"
+Write-Host ""
+```
+
+Run it:
+
+```powershell
+.\download_datasets.ps1
+```
+
+#### Option 2: Manual download (Kaggle)
+
+If you have Kaggle CLI installed:
+
+```powershell
+# Install Kaggle CLI (once)
+pip install kaggle
+
+# Download (requires API credentials at https://www.kaggle.com/settings/account)
+kaggle datasets download athiraishanmugam/ancient-tamil-stone-inscriptions
+
+# Extract
+Expand-Archive ancient-tamil-stone-inscriptions.zip -DestinationPath data\raw\tamil_stone\
+```
+
+#### Option 3: Use the sample image only
+
+A single real Tamil stone inscription is included at `data/raw/tamil_stone/IMG_3941.jpg`. This is sufficient for basic testing and development. Full datasets are required only for:
+- Comprehensive evaluation
+- Model fine-tuning
+- OCR accuracy benchmarking
+
+### Data Folder Structure (Complete)
+
+```
+data/
+├── raw/                          (← read-only: original scanned images)
+│   ├── tamil_stone/              (Ancient Tamil inscriptions)
+│   │   ├── IMG_3941.jpg          (✓ sample test image included)
+│   │   ├── IMG_3942.jpg          (download via Kaggle)
+│   │   └── ...
+│   ├── tamil_palm_leaf/          (Deteriorated palm leaf manuscripts)
+│   │   ├── sample_001.tif
+│   │   └── ...
+│   ├── tamil_characters/         (Individual character corpus)
+│   │   ├── char_001.png
+│   │   └── ...
+│   ├── sanskrit_manuscripts/     (future: Sanskrit texts)
+│   └── kannada_inscriptions/     (future: Kannada script samples)
+│
+├── enhanced/                     (← output of Stage 2 enhancement)
+│   ├── IMG_3941_enhanced.tif     (master: lossless TIFF)
+│   ├── IMG_3941_enhanced.jpg     (access: JPEG quality=95)
+│   └── ...
+│
+├── binarised/                    (← output of Stage 3 binarisation)
+│   ├── IMG_3941_binary.png       (black & white)
+│   └── ...
+│
+├── transcriptions/               (← output of Stage 4 OCR)
+│   ├── IMG_3941.txt              (raw OCR text)
+│   ├── IMG_3941.json             (structured transcription with confidence)
+│   └── ...
+│
+├── translations/                 (← output of Stage 5 translation; Phase 2)
+│   ├── IMG_3941_en.txt           (English translation)
+│   ├── IMG_3941_modern.txt       (modern source language version)
+│   └── ...
+│
+└── records/                      (← final assembled JSON records)
+    ├── INS-2024-0001.json        (complete research record)
+    ├── INS-2024-0002.json
+    └── ...
+```
+
+### Using the Sample Image
+
+To get started immediately without downloading additional datasets:
+
+```powershell
+# Verify the sample image exists
+dir data\raw\tamil_stone\IMG_3941.jpg
+
+# Preprocess it
+python -m src.preprocess `
+  --input data\raw\tamil_stone\IMG_3941.jpg `
+  --output data\enhanced\IMG_3941_preprocessed.tif
+
+# Check the output
+dir data\enhanced\
+```
+
+### Dataset Guidelines
+
+When working with datasets:
+
+1. **Never modify `data/raw/`** — it is read-only. All outputs go to subdirectories (enhanced/, binarised/, etc.)
+2. **One script per subdirectory** — Keep Tamil, Sanskrit, Kannada, etc. in separate folders for easy management
+3. **Organise by artefact type** — Use consistent naming: stone_inscriptions/, palm_leaf_manuscripts/, copper_plates/, paper_manuscripts/, cave_paintings/
+4. **Document the source** — In each subdirectory, include a README.txt with the dataset name, license, and download link
+5. **Track ground truth** — For validation, keep corresponding ground-truth transcriptions in a parallel folder (e.g., `data/ground_truth/IMG_3941.txt`)
+
+### Testing Without Full Datasets
+
+All basic tests pass with only the included sample image:
+
+```powershell
+pytest tests/test_preprocess.py -v
+# All 6 tests pass ✓
+```
+
+For OCR and binarisation tests (coming in Phase 2), a few representative samples from the Kaggle Tamil dataset will be sufficient.
 
 ---
 
