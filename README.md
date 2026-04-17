@@ -40,40 +40,33 @@ This repository implements an end-to-end pipeline to digitise historical inscrip
 
 ---
 
-## Implementation Progress (as of April 3, 2026)
+## Implementation Progress (as of April 17, 2026)
 
 ### ✅ Completed
 
 **1. Stage 1 — Preprocessing (`src/preprocess.py`)**
-   - ✅ `load_image()` — loads BGR images with colour space preservation
+   - ✅ `load_image()` — loads image via PIL with `ImageOps.exif_transpose` (corrects phone camera orientation), converts to BGR numpy array
    - ✅ `normalise_brightness()` — CLAHE histogram equalisation for uneven lighting
    - ✅ `auto_white_balance()` — grey-world assumption white balance
-   - ✅ `deskew()` — Hough line transform rotation correction with safety limits (max 10° by default)
    - ✅ `crop_borders()` — removes blank/dark margins from scans using morphological operations
-   - ✅ `preprocess()` — full chain orchestration with metadata preservation (EXIF, ICC profile, DPI)
-   - ✅ `process_directory()` — batch preprocessing with pattern matching (e.g., "*.jpg")
+   - ✅ `preprocess(img_path, output_path)` — full chain: orient → normalise → white balance → crop → save JPEG
+   - ✅ `build_output_path(input_path, output_dir)` — returns `{stem}_preprocessed.jpg`
+   - ✅ `process_directory(input_dir, output_dir, pattern)` — batch preprocessing
    - ✅ CLI with argparse:
      - Single-image mode: `--input IMAGE_PATH --output OUTPUT_PATH`
      - Batch mode: `--input-dir DIR --output-dir DIR --pattern "*.jpg"`
-     - Configurable deskew (--no-deskew, --deskew-min-lines, --deskew-max-angle)
-     - Access copy control (--no-access-copy)
      - Logging levels (DEBUG, INFO, WARNING, ERROR)
-   - ✅ Master + access copy strategy: TIFF master (lossless) + JPEG access (quality=95)
-   - ✅ Comprehensive logging for all transformations with before/after dimensions
-   - ✅ EXIF metadata sanitisation (removes problematic pointer tags)
+   - ✅ Output format: **JPEG quality=95** (no TIFF, no access copies)
+   - ✅ Comprehensive logging with before/after dimensions
 
 **2. Utilities (`src/utils.py`)**
-   - ✅ `read_image_metadata()` — extracts EXIF, ICC profile, DPI from images
-   - ✅ `save_image()` — saves BGR images via PIL with metadata preservation
-   - ✅ `_sanitise_exif()` — removes problematic EXIF pointer tags (34665, 34853, 40965)
+   - ✅ `save_image(path, image_bgr, jpeg_quality=95)` — saves BGR image as JPEG via PIL
    - ✅ `ensure_parent_dir()` — creates parent directories on demand
 
 **3. Tests (`tests/test_preprocess.py`)**
    - ✅ `test_load_image_reads_sample()` — verifies image loading (3-channel BGR)
    - ✅ `test_crop_borders_removes_synthetic_frame()` — synthetic border removal test
-   - ✅ `test_preprocess_writes_output()` — verifies both master and access copy creation
-   - ✅ `test_preprocess_no_access_copy()` — access copy disabled mode
-   - ✅ `test_preprocess_deskew_disabled()` — deskew disabled mode
+   - ✅ `test_preprocess_writes_output()` — verifies JPEG output is written
    - ✅ `test_process_directory_writes_expected_output_name()` — batch processing output naming
    - ✅ All tests use temporary directories and real sample image (`data/raw/tamil_stone/IMG_3941.jpg`)
    - ✅ Can run with: `pytest -q` or `python -m unittest`
@@ -258,7 +251,7 @@ A test image is included at `data/raw/tamil_stone/IMG_3941.jpg` for development 
 5. Run preprocessing on the sample image:
 
    ```powershell
-   python -m src.preprocess --input data\raw\tamil_stone\IMG_3941.jpg --output data\enhanced\IMG_3941_preprocessed.tif
+   python -m src.preprocess --input data\raw\tamil_stone\IMG_3941.jpg --output data\enhanced\IMG_3941_preprocessed.jpg
    ```
 
 6. View the preprocessed output in `data/enhanced/`.
@@ -313,7 +306,7 @@ C:\Projects\IDP\Project\
 │
 ├── tests\
 │   ├── __init__.py
-│   ├── test_preprocess.py             (✅ 6 tests passing)
+│   ├── test_preprocess.py             (✅ 4 tests passing)
 │   ├── test_enhance.py                (🔲 to be written)
 │   ├── test_binarise.py               (🔲 to be written)
 │   ├── test_ocr.py                    (🔲 to be written)
@@ -531,8 +524,7 @@ data/
 │   └── kannada_inscriptions/     (future: Kannada script samples)
 │
 ├── enhanced/                     (← output of Stage 2 enhancement)
-│   ├── IMG_3941_enhanced.tif     (master: lossless TIFF)
-│   ├── IMG_3941_enhanced.jpg     (access: JPEG quality=95)
+│   ├── IMG_3941_preprocessed.jpg (JPEG quality=95)
 │   └── ...
 │
 ├── binarised/                    (← output of Stage 3 binarisation)
@@ -566,7 +558,7 @@ dir data\raw\tamil_stone\IMG_3941.jpg
 # Preprocess it
 python -m src.preprocess `
   --input data\raw\tamil_stone\IMG_3941.jpg `
-  --output data\enhanced\IMG_3941_preprocessed.tif
+  --output data\enhanced\IMG_3941_preprocessed.jpg
 
 # Check the output
 dir data\enhanced\
@@ -602,7 +594,7 @@ For OCR and binarisation tests (coming in Phase 2), a few representative samples
 ```powershell
 python -m src.preprocess `
   --input data\raw\tamil_stone\IMG_3941.jpg `
-  --output data\enhanced\IMG_3941_preprocessed.tif
+  --output data\enhanced\IMG_3941_preprocessed.jpg
 ```
 
 ### 2. Batch Preprocessing
@@ -611,31 +603,19 @@ python -m src.preprocess `
 python -m src.preprocess `
   --input-dir data\raw\tamil_stone `
   --output-dir data\enhanced `
-  --pattern "*.jpg" `
-  --no-access-copy
+  --pattern "*.jpg"
 ```
 
-### 3. Preprocessing with Custom Deskew Settings
+### 3. Debug logging
 
 ```powershell
 python -m src.preprocess `
   --input data\raw\tamil_stone\IMG_3941.jpg `
-  --output data\enhanced\IMG_3941_preprocessed.tif `
-  --deskew-min-lines 15 `
-  --deskew-max-angle 5.0 `
+  --output data\enhanced\IMG_3941_preprocessed.jpg `
   --log-level DEBUG
 ```
 
-### 4. Disable Deskewing (if images are over-corrected)
-
-```powershell
-python -m src.preprocess `
-  --input data\raw\tamil_stone\IMG_3941.jpg `
-  --output data\enhanced\IMG_3941_preprocessed.tif `
-  --no-deskew
-```
-
-### 5. Python API (for scripting)
+### 4. Python API (for scripting)
 
 ```python
 from src.preprocess import preprocess, process_directory
@@ -643,9 +623,7 @@ from src.preprocess import preprocess, process_directory
 # Single image
 preprocessed = preprocess(
     r"data\raw\tamil_stone\IMG_3941.jpg",
-    r"data\enhanced\IMG_3941_preprocessed.tif",
-    enable_deskew=True,
-    save_access_copy=True
+    r"data\enhanced\IMG_3941_preprocessed.jpg",
 )
 
 # Batch processing
@@ -653,12 +631,10 @@ output_paths = process_directory(
     r"data\raw\tamil_stone",
     r"data\enhanced",
     pattern="*.jpg",
-    enable_deskew=True,
-    save_access_copy=True
 )
 ```
 
-### 6. Gradio UI (once app.py is ready)
+### 5. Gradio UI (once app.py is ready)
 
 ```powershell
 python app.py
@@ -671,7 +647,7 @@ python app.py
 
 | Stage | File | Status | Description |
 |-------|------|--------|-------------|
-| 1 | `src/preprocess.py` | ✅ | Normalise brightness, white balance, deskew, crop borders |
+| 1 | `src/preprocess.py` | ✅ | EXIF orientation correction, CLAHE normalisation, white balance, crop borders → JPEG output |
 | 2 | `src/enhance.py` | 🔲 | Denoise, Real-ESRGAN, DStretch, sharpen |
 | 3 | `src/binarise.py` | 🔲 | Sauvola/Otsu thresholding, morphological ops, noise removal |
 | 4 | `src/ocr.py` | 🔲 | Script detection, Tesseract+EasyOCR ensemble, confidence scoring |
@@ -685,9 +661,7 @@ python app.py
 ## Non-Destructive Processing Rules (MANDATORY)
 
 1. **Never overwrite original files.** Raw images in `data/raw/` are read-only. All outputs go to `data/enhanced/`, `data/binarised/`, etc.
-2. **Always save both master and access copies:**
-   - Master: TIFF lossless (for archival)
-   - Access: JPEG quality=95 (for web/preview)
+2. **Save processed images as JPEG (quality=95).** TIFF archival copies may be added in a future phase.
 3. **Follow the 3-2-1 backup rule:**
    - 3 copies of original data
    - 2 different storage media
@@ -774,10 +748,6 @@ A: Reduce tile size or run on CPU; increase `tile`/`tile_pad` params in enhance.
 
 A: Experiment with different binarisation methods (Sauvola window size), or use ensemble with EasyOCR.
 
-**Q: Deskew is over-correcting and tilting images**
-
-A: Run with `--no-deskew` or adjust `--deskew-max-angle` to a smaller value (e.g., 5.0 instead of 10.0).
-
 **Q: How do I run preprocessing in debug mode?**
 
 A:
@@ -807,5 +777,5 @@ python -m src.preprocess --input ... --output ... --log-level DEBUG
 
 ---
 
-*Last updated: April 3, 2026*  
+*Last updated: April 17, 2026*  
 *For the latest implementation status, see "Implementation Progress" section above.*
