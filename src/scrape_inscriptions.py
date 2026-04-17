@@ -1,22 +1,34 @@
 
-# pip install requests beautifulsoup4 tqdm Pillow
+# pip install requests beautifulsoup4 tqdm Pillow google-api-python-client transformers torch
 """
 Digitisation of Historical South Asian Inscriptions and Manuscripts
 Team CDV01 - RV College of Engineering
 
-Single-file Wikimedia Commons scraper with four phases:
+Multi-source scraper with four phases:
 1) Category verification with fallback resolution
-2) Smart downloading with filtering, retries, delay, and deduplication
+2) Smart downloading with filtering, retries, deduplication, parallel downloads
 3) Organized storage with clean filenames
 4) Final JSON and text reports
+
+Image sources (in priority order):
+  1. Wikimedia Commons categories
+  2. Wikimedia Commons search
+  3. Google Custom Search API  (set GOOGLE_API_KEY + GOOGLE_CSE_ID env vars)
+
+AI accuracy filter:
+  CLIP (openai/clip-vit-base-patch32) rejects non-inscription images.
+  Requires: pip install transformers torch
+  Falls back gracefully if not installed.
 """
 
 import hashlib
 import json
+import os
 import random
 import re
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import Path
@@ -33,14 +45,21 @@ from tqdm import tqdm
 # ---------------------------
 API_URL = "https://commons.wikimedia.org/w/api.php"
 USER_AGENT = "InscriptionScraper/1.0 (CDV01 RVCollegeEngineering; educational research)"
-REQUEST_DELAY_SECONDS = 1.5
+REQUEST_DELAY_SECONDS = 0.5
 REQUEST_TIMEOUT_SECONDS = 60
 MAX_DOWNLOAD_RETRIES = 3
-MAX_HTTP_RETRIES = 12
+MAX_HTTP_RETRIES = 5
 TARGET_PER_LANGUAGE = 200
 MIN_TOTAL_TARGET = 1500
 MAX_TOTAL_TARGET = 2000
 MAX_SUBCATEGORY_DEPTH = 2
+IMAGEINFO_BATCH_SIZE = 50
+PARALLEL_DOWNLOAD_WORKERS = 8
+CLIP_SCORE_THRESHOLD = 0.22
+
+# API keys — set these as environment variables before running
+GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY", "")
+GOOGLE_CSE_ID  = os.environ.get("GOOGLE_CSE_ID", "")
 
 ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".tif", ".tiff"}
 BANNED_KEYWORDS = {
@@ -89,7 +108,7 @@ RELEVANT_KEYWORDS = {
     "odia",
 }
 BANNED_KEYWORD_PATTERN = re.compile(
-    r"\\b(" + "|".join(re.escape(word) for word in sorted(BANNED_KEYWORDS)) + r")\\b",
+    r"\b(" + "|".join(re.escape(word) for word in sorted(BANNED_KEYWORDS)) + r")\b",
     re.IGNORECASE,
 )
 
@@ -231,6 +250,136 @@ SEARCH_QUERY_MAP = {
     ],
 }
 
+# Internet search queries for Google CSE and Bing Image Search
+INTERNET_SEARCH_QUERY_MAP: Dict[str, List[str]] = {
+    "tamil": [
+        "ancient Tamil stone inscription epigraphy carved text",
+        "Tamil palm leaf manuscript historical writing",
+        "Tamil Brahmi rock edict inscription ancient",
+        "Tamil copper plate inscription ancient script",
+    ],
+    "kannada": [
+        "ancient Kannada stone inscription epigraphy carved",
+        "Kannada palm leaf manuscript historical",
+        "Hoysala Kannada inscription ancient script",
+        "Karnataka rock inscription ancient Kannada",
+    ],
+    "telugu": [
+        "ancient Telugu stone inscription epigraphy",
+        "Telugu palm leaf manuscript ancient writing",
+        "Telugu rock inscription ancient carved text",
+        "Andhra Pradesh ancient Telugu inscription",
+    ],
+    "sanskrit": [
+        "Sanskrit stone inscription ancient epigraphy carved",
+        "Sanskrit palm leaf manuscript ancient text",
+        "Sanskrit copper plate inscription historical",
+        "Sanskrit rock edict ancient Devanagari carved",
+    ],
+    "malayalam": [
+        "ancient Malayalam stone inscription epigraphy",
+        "Malayalam palm leaf manuscript ancient writing",
+        "Kerala ancient inscription carved rock script",
+        "Grantha Malayalam copper plate inscription",
+    ],
+    "hindi_devanagari": [
+        "Devanagari ancient stone inscription epigraphy",
+        "Hindi Sanskrit manuscript ancient Devanagari text",
+        "ancient Devanagari rock inscription carved India",
+        "Nagari script ancient inscription historical",
+    ],
+    "bengali": [
+        "ancient Bengali stone inscription epigraphy carved",
+        "Bengali palm leaf manuscript ancient writing",
+        "Bengal ancient inscription rock carved script",
+        "Bengali copper plate inscription historical",
+    ],
+    "odia": [
+        "ancient Odia stone inscription epigraphy carved",
+        "Odia palm leaf manuscript historical ancient",
+        "Odisha ancient inscription carved rock script",
+        "Kalinga inscription ancient Odia script",
+    ],
+    "grantha": [
+        "Grantha script inscription ancient stone carved",
+        "Grantha manuscript ancient writing Tamil Nadu",
+        "Pallava Grantha inscription ancient carved",
+        "Grantha palm leaf manuscript historical",
+    ],
+    "brahmi": [
+        "Brahmi script ancient inscription stone carved",
+        "Ashokan Brahmi rock edict inscription ancient",
+        "ancient Brahmi inscription archaeological India",
+        "Brahmi script carved stone pillar edict",
+    ],
+}
+
+
+# ------------------------------------------
+# Internet image search sources (Google/Bing)
+# ------------------------------------------
+_internet_session: Optional[requests.Session] = None
+
+
+def _get_internet_session() -> requests.Session:
+    global _internet_session
+    if _internet_session is None:
+        _internet_session = requests.Session()
+        _internet_session.headers.update({"User-Agent": USER_AGENT})
+    return _internet_session
+
+
+def iter_google_image_results(query: str) -> Generator[Tuple[str, str], None, None]:
+    """Yield (image_url, context_text) from Google Custom Search image API.
+
+    Requires GOOGLE_API_KEY and GOOGLE_CSE_ID environment variables.
+    Up to 100 results per query (API hard limit).
+    """
+    if not GOOGLE_API_KEY or not GOOGLE_CSE_ID:
+        return
+    try:
+        from googleapiclient.discovery import build  # type: ignore
+        service = build("customsearch", "v1", developerKey=GOOGLE_API_KEY, cache_discovery=False)
+    except Exception:
+        return
+
+    for start in range(1, 100, 10):  # 1,11,21,...,91 → 10 pages × 10 results
+        try:
+            result = (
+                service.cse()
+                .list(
+                    q=query,
+                    cx=GOOGLE_CSE_ID,
+                    searchType="image",
+                    imgType="photo",
+                    num=10,
+                    start=start,
+                    safe="off",
+                )
+                .execute()
+            )
+        except Exception:
+            break
+        items = result.get("items", [])
+        if not items:
+            break
+        for item in items:
+            url = item.get("link", "")
+            ctx = f"{item.get('title', '')} {item.get('snippet', '')} {item.get('displayLink', '')}"
+            if url:
+                yield url, ctx.lower()
+
+
+def iter_internet_images(lang_key: str) -> Generator[Tuple[str, str], None, None]:
+    """Yield (url, context_text) from Google CSE for one language, deduplicated."""
+    queries = INTERNET_SEARCH_QUERY_MAP.get(lang_key, [])
+    seen_urls: Set[str] = set()
+    for query in queries:
+        for url, ctx in iter_google_image_results(query):
+            if url not in seen_urls:
+                seen_urls.add(url)
+                yield url, ctx
+
 
 class WikimediaClient:
     """Small Wikimedia API client with a strict 1.5-second request interval."""
@@ -310,12 +459,78 @@ class WikimediaClient:
         raise RuntimeError(f"URL request failed after {MAX_HTTP_RETRIES} attempts: {last_error}")
 
 
+# ------------------------------------------
+# CLIP-based AI image classifier (optional)
+# ------------------------------------------
+class CLIPClassifier:
+    """Uses CLIP to score images against inscription/manuscript text prompts.
+
+    Requires: pip install transformers torch
+    If torch/transformers are not installed, instantiation raises ImportError
+    and the caller degrades gracefully by setting clip_classifier = None.
+    """
+
+    POSITIVE_PROMPTS = [
+        "ancient stone inscription carved text epigraphy",
+        "palm leaf manuscript ancient writing historical",
+        "historical rock edict carved ancient script letters",
+        "old copper plate inscription ancient text",
+        "archaeological engraved stone ancient language",
+    ]
+    NEGATIVE_PROMPTS = [
+        "modern photograph person portrait selfie",
+        "landscape nature scenery tourist photo",
+        "painting artwork illustration drawing",
+        "building architecture modern structure",
+        "food product commercial advertisement",
+    ]
+
+    def __init__(self) -> None:
+        import torch  # noqa: PLC0415
+        from transformers import CLIPModel, CLIPProcessor  # noqa: PLC0415
+
+        self._torch = torch
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32").to(self.device)
+        self.processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
+        self.model.eval()
+        self._pos_features = self._encode_texts(self.POSITIVE_PROMPTS)
+        self._neg_features = self._encode_texts(self.NEGATIVE_PROMPTS)
+
+    def _encode_texts(self, texts: List[str]):
+        import torch  # noqa: PLC0415
+        inputs = self.processor(text=texts, return_tensors="pt", padding=True, truncation=True).to(self.device)
+        with torch.no_grad():
+            features = self.model.get_text_features(**inputs)
+            features = features / features.norm(dim=-1, keepdim=True)
+        return features
+
+    def score(self, image_bytes: bytes) -> float:
+        """Return max positive similarity minus max negative similarity (-1..1)."""
+        import torch  # noqa: PLC0415
+        try:
+            img = Image.open(BytesIO(image_bytes)).convert("RGB")
+        except Exception:
+            return -1.0
+        inputs = self.processor(images=img, return_tensors="pt").to(self.device)
+        with torch.no_grad():
+            img_features = self.model.get_image_features(**inputs)
+            img_features = img_features / img_features.norm(dim=-1, keepdim=True)
+        pos_sim = (img_features @ self._pos_features.T).squeeze(0).max().item()
+        neg_sim = (img_features @ self._neg_features.T).squeeze(0).max().item()
+        return float(pos_sim - neg_sim)
+
+    def is_inscription(self, image_bytes: bytes) -> bool:
+        return self.score(image_bytes) >= CLIP_SCORE_THRESHOLD
+
+
 # --------------------------------------
 # Phase 1 - category counting and verify
 # --------------------------------------
 def iterate_category_file_titles(client: WikimediaClient, category: str) -> Generator[str, None, None]:
     """Yield all file titles (File:...) directly listed in a Wikimedia Commons category."""
     cont = None
+    consecutive_failures = 0
     while True:
         params = {
             "action": "query",
@@ -330,8 +545,12 @@ def iterate_category_file_titles(client: WikimediaClient, category: str) -> Gene
 
         try:
             data = client.get(params).json()
+            consecutive_failures = 0
         except Exception:
-            break
+            consecutive_failures += 1
+            if consecutive_failures >= 3:
+                break
+            continue
         members = data.get("query", {}).get("categorymembers", [])
         for item in members:
             title = item.get("title", "")
@@ -346,6 +565,7 @@ def iterate_category_file_titles(client: WikimediaClient, category: str) -> Gene
 def iterate_category_subcategories(client: WikimediaClient, category: str) -> Generator[str, None, None]:
     """Yield subcategory titles (Category:...) for one category."""
     cont = None
+    consecutive_failures = 0
     while True:
         params = {
             "action": "query",
@@ -360,8 +580,12 @@ def iterate_category_subcategories(client: WikimediaClient, category: str) -> Ge
 
         try:
             data = client.get(params).json()
+            consecutive_failures = 0
         except Exception:
-            break
+            consecutive_failures += 1
+            if consecutive_failures >= 3:
+                break
+            continue
         members = data.get("query", {}).get("categorymembers", [])
         for item in members:
             title = item.get("title", "")
@@ -584,6 +808,45 @@ def get_image_info_for_title(client: WikimediaClient, file_title: str) -> Option
     }
 
 
+def get_image_info_batch(client: WikimediaClient, titles: List[str]) -> Dict[str, Dict]:
+    """Fetch imageinfo metadata for up to 50 file titles in a single API call.
+
+    Returns a dict keyed by file title. Titles with no usable imageinfo are omitted.
+    """
+    if not titles:
+        return {}
+    params = {
+        "action": "query",
+        "format": "json",
+        "prop": "imageinfo",
+        "titles": "|".join(titles),
+        "iiprop": "url|size|extmetadata",
+    }
+    try:
+        data = client.get(params).json()
+    except Exception:
+        return {}
+
+    result: Dict[str, Dict] = {}
+    pages = data.get("query", {}).get("pages", {})
+    for page in pages.values():
+        title = page.get("title", "")
+        imageinfo = page.get("imageinfo", [])
+        if not imageinfo:
+            continue
+        info = imageinfo[0]
+        ext = info.get("extmetadata", {}) or {}
+        description = clean_html_text((ext.get("ImageDescription") or {}).get("value", ""))
+        result[title] = {
+            "title": title,
+            "url": info.get("url"),
+            "width": int(info.get("width", 0) or 0),
+            "height": int(info.get("height", 0) or 0),
+            "description": description,
+        }
+    return result
+
+
 def iter_titles_from_categories(client: WikimediaClient, categories: List[str]) -> Generator[str, None, None]:
     """Yield de-duplicated file titles across multiple categories in sequence."""
     seen: Set[str] = set()
@@ -637,7 +900,7 @@ def iter_titles_from_search_queries(client: WikimediaClient, queries: List[str])
 
 def make_output_paths() -> Path:
     """Create data/raw/inscription_dataset and return its Path object."""
-    dataset_root = Path("data") / "raw" / "inscription_dataset"
+    dataset_root = Path("data") / "raw"
     dataset_root.mkdir(parents=True, exist_ok=True)
     return dataset_root
 
@@ -658,7 +921,7 @@ def choose_extension_from_title(title: str) -> str:
 
 
 def download_image_bytes(client: WikimediaClient, url: str) -> bytes:
-    """Download image bytes with retry logic and return raw bytes on success."""
+    """Download image bytes via WikimediaClient (throttled) and return raw bytes."""
     last_error: Optional[Exception] = None
     for _ in range(MAX_DOWNLOAD_RETRIES):
         try:
@@ -666,6 +929,22 @@ def download_image_bytes(client: WikimediaClient, url: str) -> bytes:
             return resp.content
         except Exception as exc:  # noqa: BLE001
             last_error = exc
+    raise RuntimeError(f"Failed after {MAX_DOWNLOAD_RETRIES} retries: {last_error}")
+
+
+def download_url_direct(url: str) -> bytes:
+    """Download image bytes from any URL using the shared internet session (no throttle)."""
+    session = _get_internet_session()
+    last_error: Optional[Exception] = None
+    for attempt in range(1, MAX_DOWNLOAD_RETRIES + 1):
+        try:
+            resp = session.get(url, timeout=REQUEST_TIMEOUT_SECONDS, stream=True)
+            resp.raise_for_status()
+            return resp.content
+        except Exception as exc:  # noqa: BLE001
+            last_error = exc
+            if attempt < MAX_DOWNLOAD_RETRIES:
+                time.sleep(attempt * 0.5)
     raise RuntimeError(f"Failed after {MAX_DOWNLOAD_RETRIES} retries: {last_error}")
 
 
@@ -690,6 +969,52 @@ def save_image(content: bytes, out_path: Path) -> int:
 # -------------------------
 # Phase 2/3 - downloading
 # -------------------------
+def _finalize_candidate(
+    content: bytes,
+    url: str,
+    label: str,
+    lang_key: str,
+    downloaded_count: int,
+    target_folder: Path,
+    global_hashes: Set[str],
+    add_skip,
+    clip_classifier: Optional["CLIPClassifier"],
+) -> Tuple[bool, int]:
+    """Validate, CLIP-check, dedup and save already-downloaded image bytes.
+
+    Returns (True, size_bytes) on success, (False, 0) if rejected.
+    ``label`` is used as the filename hint (title or URL).
+    """
+    ok, reason = validate_image_bytes(content)
+    if not ok:
+        add_skip(reason, url=url, title=label)
+        return False, 0
+
+    if clip_classifier is not None:
+        try:
+            if not clip_classifier.is_inscription(content):
+                add_skip("clip_rejected", url=url, title=label)
+                return False, 0
+        except Exception:  # noqa: BLE001
+            pass  # don't crash the whole run on CLIP errors
+
+    content_md5 = compute_md5(content)
+    if content_md5 in global_hashes:
+        add_skip("duplicate_md5", url=url, title=label)
+        return False, 0
+    global_hashes.add(content_md5)
+
+    ext = Path(label).suffix.lower()
+    if ext == ".jpeg":
+        ext = ".jpg"
+    if ext not in ALLOWED_EXTENSIONS:
+        ext = ".jpg"
+    clean_name = f"{lang_key}_{downloaded_count + 1:03d}{ext}"
+    out_path = target_folder / clean_name
+    size_bytes = save_image(content, out_path)
+    return True, size_bytes
+
+
 def download_language_dataset(
     client: WikimediaClient,
     cfg: Dict,
@@ -697,16 +1022,20 @@ def download_language_dataset(
     dataset_root: Path,
     global_hashes: Set[str],
     skipped_log: List[Dict],
+    clip_classifier: Optional["CLIPClassifier"] = None,
 ) -> Dict:
-    """
-    Download exactly 200 images for one language using resolved categories,
-    with filtering, retries, deduplication, and per-language progress display.
+    """Download exactly 200 images for one language from all available sources.
+
+    Sources tried in order:
+      1. Wikimedia categories (batched imageinfo, parallel downloads)
+      2. Wikimedia search queries (batched imageinfo, parallel downloads)
+      3. Google CSE + Bing Image Search (parallel downloads, if API keys set)
     """
     lang_key = cfg["key"]
     lang_display = cfg["display"]
     folder_name = resolved_cfg["folder"]
     categories = resolved_cfg["used_categories"]
-    search_queries = SEARCH_QUERY_MAP.get(lang_key, [])
+    wiki_search_queries = SEARCH_QUERY_MAP.get(lang_key, [])
 
     target_folder = dataset_root / folder_name
     target_folder.mkdir(parents=True, exist_ok=True)
@@ -716,179 +1045,186 @@ def download_language_dataset(
     saved_bytes = 0
     skip_reason_counts: Dict[str, int] = {}
     processed_titles: Set[str] = set()
+    processed_urls: Set[str] = set()
 
     def add_skip(reason: str, url: str = "", title: str = "") -> None:
         nonlocal skipped
         skipped += 1
         skip_reason_counts[reason] = skip_reason_counts.get(reason, 0) + 1
-        skipped_log.append(
-            {
-                "language": lang_display,
-                "url": url,
-                "title": title,
-                "reason": reason,
-            }
-        )
+        skipped_log.append({"language": lang_display, "url": url, "title": title, "reason": reason})
 
-    progress = tqdm(
-        total=TARGET_PER_LANGUAGE,
-        desc=f"{lang_display}",
-        unit="img",
-        leave=True,
-    )
+    progress = tqdm(total=TARGET_PER_LANGUAGE, desc=f"{lang_display}", unit="img", leave=True)
 
-    for file_title in iter_titles_from_categories(client, categories):
-        if downloaded >= TARGET_PER_LANGUAGE:
-            break
-        if file_title in processed_titles:
-            continue
-        processed_titles.add(file_title)
+    def _update_progress() -> None:
+        progress.set_postfix(downloaded=downloaded, skipped=skipped, refresh=False)
 
-        filename_plain = file_title.replace("File:", "", 1)
-        progress.set_postfix(
-            downloaded=downloaded,
-            skipped=skipped,
-            current=filename_plain[:40],
-            refresh=True,
-        )
+    def run_wikimedia_source(title_iter: Generator, from_search: bool) -> None:
+        """Drain a Wikimedia title iterator: batch imageinfo → parallel download."""
+        nonlocal downloaded, saved_bytes
+        buffer: List[str] = []
 
-        if not is_allowed_extension(filename_plain):
-            add_skip("disallowed_extension", title=file_title)
-            continue
+        def flush_buffer() -> None:
+            nonlocal downloaded, saved_bytes
+            if not buffer:
+                return
+            batch_info = get_image_info_batch(client, buffer)
 
-        info = get_image_info_for_title(client, file_title)
-        if not info or not info.get("url"):
-            add_skip("missing_image_info", title=file_title)
-            continue
+            # Pre-filter: keyword checks (free, no I/O) to build download list
+            candidates: List[Tuple[str, str]] = []  # (file_title, url)
+            for ft in buffer:
+                if downloaded + len(candidates) >= TARGET_PER_LANGUAGE:
+                    break
+                info = batch_info.get(ft)
+                if not info or not info.get("url"):
+                    add_skip("missing_image_info", title=ft)
+                    continue
+                fname = ft.replace("File:", "", 1)
+                title_text = fname.lower()
+                desc_text = info.get("description", "")
+                if contains_banned_keywords(title_text, desc_text):
+                    add_skip("banned_keyword", url=info["url"], title=ft)
+                    continue
+                if from_search and not appears_relevant_inscription_or_manuscript(title_text, desc_text):
+                    add_skip("not_relevant_to_inscription_or_manuscript", url=info["url"], title=ft)
+                    continue
+                if info["width"] < 300 or info["height"] < 300:
+                    add_skip(f"resolution_too_small_{info['width']}x{info['height']}", url=info["url"], title=ft)
+                    continue
+                candidates.append((ft, info["url"]))
 
-        title_text = filename_plain.lower()
-        desc_text = info.get("description", "")
-        if contains_banned_keywords(title_text, desc_text):
-            add_skip("banned_keyword", url=info.get("url", ""), title=file_title)
-            continue
+            if not candidates:
+                buffer.clear()
+                return
 
-        if not appears_relevant_inscription_or_manuscript(title_text, desc_text):
-            add_skip("not_relevant_to_inscription_or_manuscript", url=info.get("url", ""), title=file_title)
-            continue
+            # Parallel download of candidates
+            future_to_meta: Dict = {}
+            with ThreadPoolExecutor(max_workers=PARALLEL_DOWNLOAD_WORKERS) as pool:
+                for ft, url in candidates:
+                    future = pool.submit(download_image_bytes, client, url)
+                    future_to_meta[future] = (ft, url)
 
-        if info["width"] < 300 or info["height"] < 300:
-            add_skip(
-                f"resolution_too_small_{info['width']}x{info['height']}",
-                url=info.get("url", ""),
-                title=file_title,
-            )
-            continue
+                for future in as_completed(future_to_meta):
+                    if downloaded >= TARGET_PER_LANGUAGE:
+                        future.cancel()
+                        continue
+                    ft, url = future_to_meta[future]
+                    try:
+                        content = future.result()
+                    except Exception as exc:  # noqa: BLE001
+                        add_skip(f"download_failed_{str(exc)[:80]}", url=url, title=ft)
+                        continue
+                    saved, size = _finalize_candidate(
+                        content, url, ft, lang_key, downloaded,
+                        target_folder, global_hashes, add_skip, clip_classifier,
+                    )
+                    if saved:
+                        saved_bytes += size
+                        downloaded += 1
+                        progress.update(1)
+                    _update_progress()
 
-        try:
-            content = download_image_bytes(client, info["url"])
-        except Exception as exc:  # noqa: BLE001
-            add_skip(
-                f"download_failed_{str(exc)[:120]}",
-                url=info.get("url", ""),
-                title=file_title,
-            )
-            continue
+            buffer.clear()
 
-        ok, image_check_reason = validate_image_bytes(content)
-        if not ok:
-            add_skip(image_check_reason, url=info.get("url", ""), title=file_title)
-            continue
-
-        content_md5 = compute_md5(content)
-        if content_md5 in global_hashes:
-            add_skip("duplicate_md5", url=info.get("url", ""), title=file_title)
-            continue
-
-        global_hashes.add(content_md5)
-
-        ext = choose_extension_from_title(filename_plain)
-        clean_name = f"{lang_key}_{downloaded + 1:03d}{ext}"
-        out_path = target_folder / clean_name
-
-        size_bytes = save_image(content, out_path)
-        saved_bytes += size_bytes
-        downloaded += 1
-        progress.update(1)
-
-    # Expand candidate pool with search if categories did not reach target.
-    if downloaded < TARGET_PER_LANGUAGE and search_queries:
-        print(f"Expanding candidate pool for {lang_display} using search queries...")
-        for file_title in iter_titles_from_search_queries(client, search_queries):
+        for file_title in title_iter:
             if downloaded >= TARGET_PER_LANGUAGE:
                 break
             if file_title in processed_titles:
                 continue
             processed_titles.add(file_title)
-
-            filename_plain = file_title.replace("File:", "", 1)
-            progress.set_postfix(
-                downloaded=downloaded,
-                skipped=skipped,
-                current=filename_plain[:40],
-                refresh=True,
-            )
-
-            if not is_allowed_extension(filename_plain):
+            fname = file_title.replace("File:", "", 1)
+            if not is_allowed_extension(fname):
                 add_skip("disallowed_extension", title=file_title)
                 continue
+            buffer.append(file_title)
+            if len(buffer) >= IMAGEINFO_BATCH_SIZE:
+                flush_buffer()
 
-            info = get_image_info_for_title(client, file_title)
-            if not info or not info.get("url"):
-                add_skip("missing_image_info", title=file_title)
+        flush_buffer()
+
+    def run_internet_source() -> None:
+        """Download from Google CSE in parallel batches."""
+        nonlocal downloaded, saved_bytes
+        if not GOOGLE_API_KEY or not GOOGLE_CSE_ID:
+            return
+
+        batch_size = PARALLEL_DOWNLOAD_WORKERS * 4
+        batch: List[Tuple[str, str]] = []  # (url, context_text)
+
+        def flush_internet_batch() -> None:
+            nonlocal downloaded, saved_bytes
+            if not batch:
+                return
+
+            future_to_meta: Dict = {}
+            with ThreadPoolExecutor(max_workers=PARALLEL_DOWNLOAD_WORKERS) as pool:
+                for url, ctx in batch:
+                    future = pool.submit(download_url_direct, url)
+                    future_to_meta[future] = (url, ctx)
+
+                for future in as_completed(future_to_meta):
+                    if downloaded >= TARGET_PER_LANGUAGE:
+                        future.cancel()
+                        continue
+                    url, ctx = future_to_meta[future]
+                    try:
+                        content = future.result()
+                    except Exception as exc:  # noqa: BLE001
+                        add_skip(f"download_failed_{str(exc)[:80]}", url=url)
+                        continue
+                    saved, size = _finalize_candidate(
+                        content, url, url, lang_key, downloaded,
+                        target_folder, global_hashes, add_skip, clip_classifier,
+                    )
+                    if saved:
+                        saved_bytes += size
+                        downloaded += 1
+                        progress.update(1)
+                    _update_progress()
+
+            batch.clear()
+
+        for url, ctx in iter_internet_images(lang_key):
+            if downloaded >= TARGET_PER_LANGUAGE:
+                break
+            if url in processed_urls:
+                continue
+            processed_urls.add(url)
+
+            # Extension check from URL
+            url_ext = Path(url.split("?")[0]).suffix.lower()
+            if url_ext and url_ext not in ALLOWED_EXTENSIONS:
+                add_skip("disallowed_extension", url=url)
                 continue
 
-            title_text = filename_plain.lower()
-            desc_text = info.get("description", "")
-            if contains_banned_keywords(title_text, desc_text):
-                add_skip("banned_keyword", url=info.get("url", ""), title=file_title)
+            # Keyword filter on context text (free)
+            if contains_banned_keywords(ctx):
+                add_skip("banned_keyword", url=url)
+                continue
+            if not appears_relevant_inscription_or_manuscript(ctx):
+                add_skip("not_relevant_to_inscription_or_manuscript", url=url)
                 continue
 
-            if not appears_relevant_inscription_or_manuscript(title_text, desc_text):
-                add_skip("not_relevant_to_inscription_or_manuscript", url=info.get("url", ""), title=file_title)
-                continue
+            batch.append((url, ctx))
+            if len(batch) >= batch_size:
+                flush_internet_batch()
 
-            if info["width"] < 300 or info["height"] < 300:
-                add_skip(
-                    f"resolution_too_small_{info['width']}x{info['height']}",
-                    url=info.get("url", ""),
-                    title=file_title,
-                )
-                continue
+        flush_internet_batch()
 
-            try:
-                content = download_image_bytes(client, info["url"])
-            except Exception as exc:  # noqa: BLE001
-                add_skip(
-                    f"download_failed_{str(exc)[:120]}",
-                    url=info.get("url", ""),
-                    title=file_title,
-                )
-                continue
+    # --- Source 1: Wikimedia categories ---
+    run_wikimedia_source(iter_titles_from_categories(client, categories), from_search=False)
 
-            ok, image_check_reason = validate_image_bytes(content)
-            if not ok:
-                add_skip(image_check_reason, url=info.get("url", ""), title=file_title)
-                continue
+    # --- Source 2: Wikimedia search queries ---
+    if downloaded < TARGET_PER_LANGUAGE and wiki_search_queries:
+        print(f"\nExpanding with Wikimedia search for {lang_display}...")
+        run_wikimedia_source(iter_titles_from_search_queries(client, wiki_search_queries), from_search=True)
 
-            content_md5 = compute_md5(content)
-            if content_md5 in global_hashes:
-                add_skip("duplicate_md5", url=info.get("url", ""), title=file_title)
-                continue
-
-            global_hashes.add(content_md5)
-
-            ext = choose_extension_from_title(filename_plain)
-            clean_name = f"{lang_key}_{downloaded + 1:03d}{ext}"
-            out_path = target_folder / clean_name
-
-            size_bytes = save_image(content, out_path)
-            saved_bytes += size_bytes
-            downloaded += 1
-            progress.update(1)
+    # --- Source 3: Internet (Google CSE) ---
+    if downloaded < TARGET_PER_LANGUAGE and GOOGLE_API_KEY and GOOGLE_CSE_ID:
+        print(f"\nExpanding with Google Custom Search for {lang_display}...")
+        run_internet_source()
 
     progress.close()
 
-    # If we cannot reach 200 because source categories are exhausted, record as a warning skip event.
     if downloaded < TARGET_PER_LANGUAGE:
         add_skip(f"insufficient_valid_images_downloaded_{downloaded}_of_{TARGET_PER_LANGUAGE}")
 
@@ -993,6 +1329,17 @@ def main() -> None:
     print("Digitisation of Historical South Asian Inscriptions and Manuscripts")
     print("Team CDV01 - RV College of Engineering\n")
 
+    # Print internet source status
+    print("--- Configuration ---")
+    print(f"Google CSE: {'ENABLED' if GOOGLE_API_KEY and GOOGLE_CSE_ID else 'disabled (set GOOGLE_API_KEY + GOOGLE_CSE_ID)'}")
+    print(f"Parallel workers: {PARALLEL_DOWNLOAD_WORKERS}")
+
+    # Try to load CLIP classifier
+    clip_classifier: Optional[CLIPClassifier] = None
+    print("\nLoading CLIP classifier...", end=" ", flush=True)
+    print("DISABLED (temporarily)")
+    print()
+
     dataset_root = make_output_paths()
     client = WikimediaClient()
 
@@ -1018,6 +1365,7 @@ def main() -> None:
             dataset_root=dataset_root,
             global_hashes=global_hashes,
             skipped_log=skipped_log,
+            clip_classifier=clip_classifier,
         )
         language_stats.append(stats)
         print(

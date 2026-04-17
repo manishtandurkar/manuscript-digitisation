@@ -10,7 +10,6 @@ import numpy as np
 from PIL import Image
 
 from src.preprocess import (
-    build_access_output_path,
     build_output_path,
     crop_borders,
     load_image,
@@ -41,41 +40,16 @@ class PreprocessTests(unittest.TestCase):
 
     def test_preprocess_writes_output(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
-            output_path = Path(tmp_dir) / "preprocessed.tif"
-            result = preprocess(str(SAMPLE_IMAGE), str(output_path), save_access_copy=True)
+            output_path = Path(tmp_dir) / "preprocessed.jpg"
+            result = preprocess(str(SAMPLE_IMAGE), str(output_path))
 
             self.assertTrue(output_path.exists())
-            self.assertTrue(build_access_output_path(output_path).exists())
             self.assertGreater(result.shape[0], 0)
             self.assertGreater(result.shape[1], 0)
 
             with Image.open(output_path) as image:
                 self.assertGreater(image.size[0], 0)
                 self.assertGreater(image.size[1], 0)
-
-    def test_preprocess_no_access_copy(self) -> None:
-        """Test that access copy can be disabled for efficiency."""
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            output_path = Path(tmp_dir) / "preprocessed.tif"
-            result = preprocess(str(SAMPLE_IMAGE), str(output_path), save_access_copy=False)
-
-            self.assertTrue(output_path.exists())
-            self.assertFalse(build_access_output_path(output_path).exists())
-            self.assertGreater(result.shape[0], 0)
-
-    def test_preprocess_deskew_disabled(self) -> None:
-        """Test that deskew can be disabled."""
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            output_path = Path(tmp_dir) / "preprocessed.tif"
-            result = preprocess(
-                str(SAMPLE_IMAGE), 
-                str(output_path),
-                enable_deskew=False,
-                save_access_copy=False,
-            )
-
-            self.assertTrue(output_path.exists())
-            self.assertGreater(result.shape[0], 0)
 
     def test_process_directory_writes_expected_output_name(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -86,17 +60,12 @@ class PreprocessTests(unittest.TestCase):
             sample_copy = input_dir / SAMPLE_IMAGE.name
             shutil.copy2(SAMPLE_IMAGE, sample_copy)
 
-            output_paths = process_directory(
-                str(input_dir), 
-                str(output_dir),
-                save_access_copy=True,
-            )
+            output_paths = process_directory(str(input_dir), str(output_dir))
 
             self.assertEqual(len(output_paths), 1)
             expected_path = build_output_path(sample_copy, output_dir)
             self.assertEqual(output_paths[0], expected_path)
             self.assertTrue(expected_path.exists())
-            self.assertTrue(build_access_output_path(expected_path).exists())
 
 
 if __name__ == "__main__":

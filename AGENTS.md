@@ -31,7 +31,7 @@ image, a transcription in the original script, an English translation, and rich 
 ```
 Raw image input
       ↓
-1. Preprocessing        (normalise, deskew, white balance, crop)          ← Phase 1
+1. Preprocessing        (normalise, white balance, crop, orient)          ← Phase 1
       ↓
 2. Enhancement          (denoise, sharpen, super-resolution, DStretch)     ← Phase 1
       ↓
@@ -222,11 +222,11 @@ python -c "import pytesseract; print(pytesseract.get_languages())"
 
 **Purpose:** Normalise raw images before AI enhancement. Fix orientation, colour, and crop.
 
-**Key functions to implement:**
+**Key functions:**
 
 ```python
 def load_image(path: str) -> np.ndarray:
-    """Load image preserving colour space. Return BGR numpy array."""
+    """Load image as BGR numpy array, applying EXIF orientation via PIL so output is visually upright."""
 
 def normalise_brightness(img: np.ndarray) -> np.ndarray:
     """CLAHE histogram equalisation for uneven lighting."""
@@ -234,21 +234,24 @@ def normalise_brightness(img: np.ndarray) -> np.ndarray:
 def auto_white_balance(img: np.ndarray) -> np.ndarray:
     """Grey-world assumption white balance correction."""
 
-def deskew(img: np.ndarray) -> np.ndarray:
-    """Detect and correct rotation angle using Hough line transform."""
-
 def crop_borders(img: np.ndarray, threshold: int = 10) -> np.ndarray:
     """Remove blank/dark border margins from scans."""
 
 def preprocess(img_path: str, output_path: str) -> np.ndarray:
-    """Run full preprocessing chain and save result."""
+    """Run full preprocessing chain and save result as JPEG."""
+
+def build_output_path(input_path, output_dir) -> Path:
+    """Returns output_dir / {stem}_preprocessed.jpg"""
+
+def process_directory(input_dir, output_dir, pattern="*.jpg") -> list[Path]:
+    """Batch preprocess all matching images in a directory."""
 ```
 
 **Implementation notes:**
+- Use `PIL.ImageOps.exif_transpose` in `load_image` to correct orientation before any processing — EXIF orientation tag is NOT carried over to output (already baked into pixels)
 - Use `cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))` for CLAHE
-- For deskew: detect lines with `cv2.HoughLinesP`, compute median angle, rotate with `cv2.warpAffine`
-- Preserve original EXIF metadata — copy it to the output file
-- Log before/after dimensions and any corrections applied
+- Output format is **JPEG** (quality=95) — no TIFF, no access copies
+- Log before/after dimensions for every image
 
 ---
 
@@ -789,9 +792,7 @@ These rules are MANDATORY. Never break them.
 1. **Never overwrite original files.** Raw images in `data/raw/` are read-only.
    All outputs go to `data/enhanced/`, `data/binarised/`, etc.
 
-2. **Always save both master and access copies:**
-   - Master: TIFF lossless (for archival)
-   - Access: JPEG quality=95 (for web/preview)
+2. **Save processed images as JPEG (quality=95).** TIFF archival copies may be added in a future phase if storage requirements demand it.
 
 3. **Follow the 3-2-1 backup rule:**
    - 3 copies of original data
@@ -846,7 +847,7 @@ python src/enhance.py --input data/raw/test_001.jpg \
 | EasyOCR + Tesseract ensemble | Neither engine is perfect for ancient scripts; combining raises confidence |
 | JSON record format | Human-readable, version-controllable, easy to export to any format |
 | Gradio for UI | Zero frontend code needed; instant web interface; easily shareable |
-| TIFF for master output | Lossless; preserves full bit depth; industry standard for archival |
+| JPEG for preprocessed output | Avoids PIL/libtiff metadata write failures on Windows; smaller files; sufficient quality at 95 for subsequent pipeline stages |
 
 ---
 
