@@ -81,3 +81,39 @@ def test_sharpen_increases_sharpness():
         gray = cv2_local.cvtColor(img, cv2_local.COLOR_BGR2GRAY)
         return float(cv2_local.Laplacian(gray, cv2_local.CV_64F).var())
     assert lap_var(sharpened) > lap_var(blurry)
+
+
+def test_enhance_with_realesrgan_mocked(monkeypatch, tmp_path):
+    """Real-ESRGAN path works when upsampler is mocked."""
+    from src import enhance as enhance_mod
+
+    class FakeUpsampler:
+        def enhance(self, img_rgb, outscale):
+            return img_rgb, None
+
+    monkeypatch.setattr(enhance_mod, "_build_upsampler", lambda path: FakeUpsampler())
+
+    fake_pth = tmp_path / "fake.pth"
+    fake_pth.write_bytes(b"fake")  # create the file so download is skipped
+    img = _bgr()
+    out = enhance_mod.enhance_with_realesrgan(img, model_path=str(fake_pth))
+    assert out.shape[2] == 3
+    assert out.dtype == np.uint8
+
+
+def test_enhance_with_realesrgan_returns_bgr(monkeypatch, tmp_path):
+    """Output is BGR uint8."""
+    from src import enhance as enhance_mod
+
+    class FakeUpsampler:
+        def enhance(self, img_rgb, outscale):
+            return img_rgb, None
+
+    monkeypatch.setattr(enhance_mod, "_build_upsampler", lambda path: FakeUpsampler())
+
+    fake_pth = tmp_path / "fake.pth"
+    fake_pth.write_bytes(b"fake")  # create the file so download is skipped
+    img = _bgr(32, 32)
+    out = enhance_mod.enhance_with_realesrgan(img, model_path=str(fake_pth))
+    assert out.dtype == np.uint8
+    assert len(out.shape) == 3
