@@ -10,7 +10,7 @@ IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".tif", ".tiff"}
 
 def _find_raw_path(image_id: str) -> Path | None:
     for path in RAW_DIR.rglob("*"):
-        if path.is_file() and path.stem == image_id and path.suffix.lower() in IMAGE_SUFFIXES:
+        if path.is_file() and path.stem.lower() == image_id.lower() and path.suffix.lower() in IMAGE_SUFFIXES:
             return path
     return None
 
