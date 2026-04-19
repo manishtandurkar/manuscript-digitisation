@@ -28,15 +28,20 @@ def dstretch(img: np.ndarray, colour_space: str = "LAB") -> np.ndarray:
     flat = img_float.reshape(-1, 3)
     mean = flat.mean(axis=0)
     centered = flat - mean
-    cov = np.cov(centered.T)
+    n = flat.shape[0]
+    cov = (centered.T @ centered) / (n - 1)
     eigenvalues, eigenvectors = np.linalg.eigh(cov)
+    if eigenvalues.max() < 1e-8:
+        LOGGER.warning("dstretch: near-uniform image, skipping stretch")
+        return img.copy()
     stretch_matrix = (
         eigenvectors
         @ np.diag(1.0 / np.sqrt(eigenvalues + 1e-10))
         @ eigenvectors.T
     )
-    stretched = centered @ stretch_matrix.T
-    lo, hi = stretched.min(), stretched.max()
+    stretched = centered @ stretch_matrix
+    lo = stretched.min(axis=0)
+    hi = stretched.max(axis=0)
     stretched = (stretched - lo) / (hi - lo + 1e-10)
     return (stretched.reshape(img_float.shape) * 255).astype(np.uint8)
 
