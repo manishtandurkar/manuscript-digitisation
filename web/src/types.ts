@@ -2,6 +2,7 @@ export interface ImageMeta {
   id: string;
   filename: string;
   url: string;
+  thumbnail_url: string;
 }
 
 export type StageStatus = "pending" | "running" | "done" | "failed" | "skipped";

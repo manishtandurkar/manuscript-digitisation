@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, field_validator
@@ -17,6 +18,7 @@ class ImageMeta(BaseModel):
     id: str
     filename: str
     url: str
+    thumbnail_url: str
 
 
 app = FastAPI(title="IDP Web UI")
@@ -42,8 +44,18 @@ def list_images() -> list[ImageMeta]:
                 id=path.stem,
                 filename=path.name,
                 url=f"/data/{relative.as_posix()}",
+                thumbnail_url=f"/api/images/{path.stem}/thumbnail",
             ))
     return images
+
+
+@app.get("/api/images/{image_id}/thumbnail")
+def get_thumbnail(image_id: str) -> FileResponse:
+    from api.pipeline import make_thumbnail
+    thumb = make_thumbnail(image_id)
+    if thumb is None:
+        raise HTTPException(status_code=404, detail="Image not found")
+    return FileResponse(str(thumb), media_type="image/jpeg")
 
 
 class ProcessRequest(BaseModel):
