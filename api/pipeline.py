@@ -44,6 +44,8 @@ def _find_raw_path(image_id: str) -> Path | None:
 def run_stage(image_id: str, stage: str) -> dict:
     if stage == "preprocess":
         return _run_preprocess(image_id)
+    if stage == "enhance":
+        return _run_enhance(image_id)
     return {"status": "skipped", "reason": f"Stage '{stage}' not yet implemented"}
 
 
@@ -59,6 +61,29 @@ def _run_preprocess(image_id: str) -> dict:
 
     try:
         preprocess(str(raw_path), str(output_path))
+        return {
+            "status": "done",
+            "url": f"/data/enhanced/{output_path.name}",
+        }
+    except Exception as exc:
+        return {"status": "failed", "error": str(exc)}
+
+
+def _run_enhance(image_id: str) -> dict:
+    from src.enhance import enhance
+
+    # Prefer preprocessed output as input; fall back to raw image
+    preprocessed = ENHANCED_DIR / f"{image_id}_preprocessed.jpg"
+    src_path = preprocessed if preprocessed.exists() else _find_raw_path(image_id)
+
+    if src_path is None:
+        return {"status": "failed", "error": f"No image found for id '{image_id}'"}
+
+    ENHANCED_DIR.mkdir(parents=True, exist_ok=True)
+    output_path = ENHANCED_DIR / f"{image_id}_enhanced.jpg"
+
+    try:
+        enhance(str(src_path), str(output_path))
         return {
             "status": "done",
             "url": f"/data/enhanced/{output_path.name}",

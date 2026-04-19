@@ -84,7 +84,7 @@ def test_run_stage_preprocess_returns_done():
 
 def test_run_stage_unknown_returns_skipped():
     from api.pipeline import run_stage
-    result = run_stage("IMG_3941", "enhance")
+    result = run_stage("IMG_3941", "translate")
     assert result["status"] == "skipped"
 
 
@@ -109,3 +109,12 @@ def test_job_eventually_completes():
     assert data["completed"] == 1
     stage_result = data["results"]["IMG_3941"]["preprocess"]
     assert stage_result["status"] in ("done", "skipped", "failed")
+
+
+def test_run_stage_enhance_returns_done_or_failed():
+    """enhance stage is now implemented — must not return skipped."""
+    from api.pipeline import run_stage
+    result = run_stage("IMG_3941", "enhance")
+    assert result["status"] in ("done", "failed"), (
+        f"Expected done or failed, got: {result['status']}"
+    )
