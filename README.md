@@ -40,7 +40,7 @@ This repository implements an end-to-end pipeline to digitise historical inscrip
 
 ---
 
-## Implementation Progress (as of April 17, 2026)
+## Implementation Progress (as of April 19, 2026)
 
 ### ✅ Completed
 
@@ -84,7 +84,23 @@ This repository implements an end-to-end pipeline to digitise historical inscrip
    - ✅ `src/__init__.py` — package marker
    - ✅ Sample image: `data/raw/tamil_stone/IMG_3941.jpg` (Tamil stone inscription)
 
-**5. Documentation**
+**5. Web UI (`api/` + `web/`) — NEW**
+   - ✅ **FastAPI backend** (`api/main.py`) — REST endpoints wrapping the pipeline:
+     - `GET /api/images` — lists all raw images in `data/raw/` (recursive, returns id/filename/url)
+     - `POST /api/process` — starts a processing job (returns `job_id`), spawns background threads per image
+     - `GET /api/jobs/{job_id}` — polls job status and per-stage results
+     - Static file serving of `data/` directory at `/data`
+   - ✅ **Job system** (`api/jobs.py`) — thread-safe in-memory job store; one daemon thread per image, stages run sequentially per image, images run in parallel
+   - ✅ **Pipeline adapter** (`api/pipeline.py`) — bridges FastAPI and `src/preprocess.py`; returns `{"status": "done", "url": ...}` or `{"status": "skipped"/"failed"}`
+   - ✅ **React + Vite frontend** (`web/`) — TypeScript, Tailwind CSS v4, TanStack Query v5:
+     - Sidebar layout with Gallery and Results views
+     - Image gallery with search filter, multi-select, select-all
+     - Stage panel: choose individual stages or run full pipeline
+     - Results page: per-image cards with **before/after comparison slider** (drag to reveal), status badges, lightbox for full-size viewing
+     - Job polling every 2 s; results render incrementally as stages complete
+   - ✅ **API tests** (`tests/test_api.py`) — 11 tests covering all endpoints and background job completion
+
+**6. Documentation**
    - ✅ **AGENTS.md** — comprehensive project specification (15,000+ words)
      - End-to-end pipeline architecture
      - Detailed implementation specs for all 8 stages
@@ -173,27 +189,10 @@ This repository implements an end-to-end pipeline to digitise historical inscrip
    - 🔲 CSV metadata integration (batch_meta.csv)
    - 🔲 Comprehensive tests
 
-**8. Stage 8 — Gradio UI (`app.py`)**
-   - 🔲 "Process new image" tab:
-     - Image upload widget
-     - Artefact metadata form (type, location, script, period, material, condition)
-     - Run button → pipeline execution → results display
-   - 🔲 "Browse records" tab with search/filter by script, location, period
-   - 🔲 "View record" detail card with before/after images, transcription
-   - 🔲 "Export" button (PDF/JSON download)
-   - 🔲 "Translation" tab (DISABLED in Phase 1, activated in Phase 2)
-   - 🔲 Error handling and status messages
-   - 🔲 Tests
-
-**9. Optional REST API (`api.py`)**
-   - 🔲 FastAPI endpoints:
-     - POST `/process` — submit image + metadata
-     - GET `/records/{record_id}` — fetch record
-     - GET `/records?script=tamil&period=7th` — search/filter
-     - GET `/exports/{record_id}` — download PDF/JSON
-   - 🔲 Async processing with background tasks
-   - 🔲 OpenAPI docs/Swagger UI
-   - 🔲 Tests
+**8. Web UI — ✅ Implemented (React + FastAPI, replaces Gradio plan)**
+   - See "Web UI" section above — fully implemented as of April 19, 2026
+   - Start with: `uvicorn api.main:app --port 8000` + `cd web && npm run dev`
+   - Access at `http://localhost:5173`
 
 **10. Quality Evaluation Metrics (`src/metrics.py` — ECE responsibility)**
    - 🔲 PSNR (Peak Signal-to-Noise Ratio) — target ≥ 30 dB
@@ -210,9 +209,9 @@ This repository implements an end-to-end pipeline to digitise historical inscrip
    - 🔲 Colour distribution analysis — per-channel statistics
    - 🔲 Histogram comparison plots (before/after enhancement)
 
-**12. Dependencies & Environment**
-   - 🔲 Create `requirements.txt` with pinned versions (see AGENTS.md § 4)
-   - 🔲 Create `environment.yml` for Conda users
+**9. Dependencies & Environment**
+   - ✅ `requirements.txt` — fastapi, uvicorn, httpx, opencv-python, numpy, Pillow
+   - 🔲 `environment.yml` for Conda users
    - 🔲 Add GPU detection and optional CUDA setup guide
 
 ---
@@ -287,6 +286,21 @@ C:\Projects\IDP\Project\
 │   ├── weights\                       (model files: RealESRGAN, etc.)
 │   └── custom\                        (fine-tuned models; future)
 │
+├── api\                               (✅ FastAPI backend)
+│   ├── __init__.py
+│   ├── main.py                        (✅ /api/images, /api/process, /api/jobs/{id})
+│   ├── jobs.py                        (✅ thread-safe in-memory job store)
+│   └── pipeline.py                    (✅ adapter calling src/preprocess.py)
+│
+├── web\                               (✅ React + Vite frontend)
+│   ├── src\
+│   │   ├── App.tsx                    (✅ sidebar layout, gallery/results views)
+│   │   ├── types.ts                   (✅ TypeScript types)
+│   │   ├── api\client.ts              (✅ fetch wrappers)
+│   │   ├── hooks\                     (✅ useImages, useJob)
+│   │   └── components\                (✅ ImageGrid, StagePanel, ResultViewer, ComparisonSlider, …)
+│   └── package.json
+│
 ├── src\
 │   ├── __init__.py
 │   ├── preprocess.py                  (✅ Stage 1: implemented)
@@ -301,12 +315,12 @@ C:\Projects\IDP\Project\
 │   ├── analysis.py                    (🔲 analysis tools; ECE)
 │   └── metrics.py                     (🔲 quality metrics; ECE)
 │
-├── app.py                             (🔲 Stage 8: Gradio UI)
-├── api.py                             (🔲 optional: FastAPI REST)
+├── requirements.txt                   (✅ Python dependencies)
 │
 ├── tests\
 │   ├── __init__.py
 │   ├── test_preprocess.py             (✅ 4 tests passing)
+│   ├── test_api.py                    (✅ 11 API tests passing)
 │   ├── test_enhance.py                (🔲 to be written)
 │   ├── test_binarise.py               (🔲 to be written)
 │   ├── test_ocr.py                    (🔲 to be written)
@@ -634,12 +648,20 @@ output_paths = process_directory(
 )
 ```
 
-### 5. Gradio UI (once app.py is ready)
+### 5. Web UI
+
+In two terminals from the project root:
 
 ```powershell
-python app.py
-# open http://localhost:7860 in your browser
+# Terminal 1 — FastAPI backend
+uvicorn api.main:app --reload --port 8000
+
+# Terminal 2 — React frontend
+cd web
+npm run dev
 ```
+
+Open `http://localhost:5173` in your browser.
 
 ---
 
@@ -654,7 +676,7 @@ python app.py
 | 5 | `src/translate.py` | 🔲 | MT + LLM-based translation (Phase 2) |
 | 6 | `src/record.py` | 🔲 | Assemble JSON records, export PDFs |
 | 7 | `src/pipeline.py` | 🔲 | Orchestrate all stages, batch processing |
-| 8 | `app.py` | 🔲 | Gradio UI for upload, browse, export |
+| 8 | `api/` + `web/` | ✅ | FastAPI REST backend + React web UI with before/after comparison |
 
 ---
 
@@ -777,5 +799,5 @@ python -m src.preprocess --input ... --output ... --log-level DEBUG
 
 ---
 
-*Last updated: April 17, 2026*  
+*Last updated: April 19, 2026*  
 *For the latest implementation status, see "Implementation Progress" section above.*

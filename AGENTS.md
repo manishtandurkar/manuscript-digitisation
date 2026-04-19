@@ -45,7 +45,7 @@ Raw image input
       ↓
 7. Storage & export     (save to database, export PDF/JSON)
       ↓
-8. UI / portal          (Gradio interface for upload, browse, search)
+8. UI / portal          (React + FastAPI web UI — browse, select, process, compare) ✅
 ```
 
 ---
@@ -87,20 +87,37 @@ inscription-digitisation/
 │   │   └── RealESRGAN_x4plus_anime_6B.pth
 │   └── custom/                  ← fine-tuned models (future)
 │
+├── api/                         ← ✅ FastAPI backend (implemented April 2026)
+│   ├── __init__.py
+│   ├── main.py                  ← /api/images, /api/process, /api/jobs/{id}, StaticFiles
+│   ├── jobs.py                  ← thread-safe in-memory job store
+│   └── pipeline.py              ← adapter calling src/preprocess.py
+│
+├── web/                         ← ✅ React + Vite frontend (implemented April 2026)
+│   ├── src/
+│   │   ├── App.tsx              ← sidebar layout, gallery/results routing
+│   │   ├── types.ts             ← ImageMeta, Job, StageResult, StageName
+│   │   ├── api/client.ts        ← listImages, processImages, getJob
+│   │   ├── hooks/               ← useImages (TanStack Query), useJob (polling)
+│   │   └── components/          ← ImageGrid, ImageCard, StagePanel,
+│   │                               ResultViewer, ComparisonSlider, ProgressBar
+│   └── package.json
+│
 ├── src/
-│   ├── preprocess.py            ← Stage 1: preprocessing
+│   ├── preprocess.py            ← Stage 1: preprocessing ✅
 │   ├── enhance.py               ← Stage 2: AI enhancement
 │   ├── binarise.py              ← Stage 3: binarisation
 │   ├── ocr.py                   ← Stage 4: OCR + transcription
 │   ├── translate.py             ← Stage 5: translation
 │   ├── record.py                ← Stage 6: record assembly
 │   ├── pipeline.py              ← orchestrates all stages end-to-end
-│   └── utils.py                 ← shared helpers
+│   └── utils.py                 ← shared helpers ✅
 │
-├── app.py                       ← Gradio web interface
-├── api.py                       ← optional REST API (FastAPI)
+├── requirements.txt             ← ✅ Python deps (fastapi, uvicorn, opencv, etc.)
 │
 ├── tests/
+│   ├── test_preprocess.py       ← ✅ 4 tests
+│   ├── test_api.py              ← ✅ 11 API endpoint tests
 │   ├── test_enhance.py
 │   ├── test_ocr.py
 │   └── sample_images/           ← small test images for CI
@@ -109,6 +126,18 @@ inscription-digitisation/
     ├── exports/                 ← PDF exports for download
     └── logs/                    ← processing logs
 ```
+
+### Running the Web UI
+
+```bash
+# Terminal 1 — FastAPI backend (port 8000)
+uvicorn api.main:app --reload --port 8000
+
+# Terminal 2 — React frontend (port 5173)
+cd web && npm run dev
+```
+
+Open http://localhost:5173 in your browser.
 
 ---
 
@@ -657,10 +686,23 @@ IMG_003.jpg,copper_plate,copper,9th century CE,Kanchipuram,grantha,good
 
 ---
 
-### Stage 8 — Gradio UI (`app.py`)
+### Stage 8 — Web UI (`api/` + `web/`) ✅ Implemented April 2026
 
-**Purpose:** Simple web interface for non-technical team members and researchers
-to upload images, trigger processing, and browse results.
+**Purpose:** Browser-based interface for browsing inscription images, selecting images,
+running pipeline stages, and comparing original vs. processed outputs side-by-side.
+
+**Stack:** FastAPI backend + React 19 + Vite 6 + Tailwind CSS v4 + TanStack Query v5.
+
+**Note:** Original plan called for Gradio. Replaced with React + FastAPI for a more
+modern, interactive experience (before/after comparison slider, job polling, sidebar layout).
+
+**Start:**
+```bash
+uvicorn api.main:app --reload --port 8000   # backend
+cd web && npm run dev                        # frontend → http://localhost:5173
+```
+
+**Original Gradio stub (kept for reference):**
 
 **Tabs to implement:**
 
@@ -846,7 +888,7 @@ python src/enhance.py --input data/raw/test_001.jpg \
 | Sauvola binarisation over Otsu | Handles uneven backgrounds (stone surface, aged palm leaf) better than global threshold |
 | EasyOCR + Tesseract ensemble | Neither engine is perfect for ancient scripts; combining raises confidence |
 | JSON record format | Human-readable, version-controllable, easy to export to any format |
-| Gradio for UI | Zero frontend code needed; instant web interface; easily shareable |
+| React + FastAPI for UI | Modern interactive UI with before/after slider, job polling, sidebar layout; replaces original Gradio plan |
 | JPEG for preprocessed output | Avoids PIL/libtiff metadata write failures on Windows; smaller files; sufficient quality at 95 for subsequent pipeline stages |
 
 ---
