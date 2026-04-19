@@ -86,3 +86,26 @@ def test_run_stage_unknown_returns_skipped():
     from api.pipeline import run_stage
     result = run_stage("IMG_3941", "enhance")
     assert result["status"] == "skipped"
+
+
+import time
+
+
+def test_job_eventually_completes():
+    response = client.post("/api/process", json={
+        "image_ids": ["IMG_3941"],
+        "stages": ["preprocess"],
+    })
+    job_id = response.json()["job_id"]
+
+    for _ in range(30):  # poll up to 30 s
+        status_resp = client.get(f"/api/jobs/{job_id}")
+        data = status_resp.json()
+        if data["status"] == "done":
+            break
+        time.sleep(1)
+
+    assert data["status"] == "done"
+    assert data["completed"] == 1
+    stage_result = data["results"]["IMG_3941"]["preprocess"]
+    assert stage_result["status"] in ("done", "skipped", "failed")

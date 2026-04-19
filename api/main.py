@@ -60,8 +60,9 @@ class ProcessRequest(BaseModel):
 
 @app.post("/api/process")
 def start_process(req: ProcessRequest) -> dict:
-    from api.jobs import create_job
+    from api.jobs import create_job, start_job
     job_id = create_job(req.image_ids, req.stages)
+    start_job(job_id, req.image_ids, req.stages)
     return {"job_id": job_id}
 
 
