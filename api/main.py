@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 RAW_DIR = _PROJECT_ROOT / "data" / "raw"
@@ -44,3 +44,31 @@ def list_images() -> list[ImageMeta]:
                 url=f"/data/{relative.as_posix()}",
             ))
     return images
+
+
+class ProcessRequest(BaseModel):
+    image_ids: list[str]
+    stages: list[str]
+
+    @field_validator("image_ids")
+    @classmethod
+    def images_not_empty(cls, v: list[str]) -> list[str]:
+        if not v:
+            raise ValueError("image_ids must not be empty")
+        return v
+
+
+@app.post("/api/process")
+def start_process(req: ProcessRequest) -> dict:
+    from api.jobs import create_job
+    job_id = create_job(req.image_ids, req.stages)
+    return {"job_id": job_id}
+
+
+@app.get("/api/jobs/{job_id}")
+def get_job_status(job_id: str) -> dict:
+    from api.jobs import get_job
+    job = get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return job

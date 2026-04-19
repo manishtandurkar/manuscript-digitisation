@@ -33,3 +33,43 @@ def test_list_images_urls_start_with_data():
     images = response.json()
     for img in images:
         assert img["url"].startswith("/data/"), f"Bad URL: {img['url']}"
+
+
+def test_process_returns_job_id():
+    response = client.post("/api/process", json={
+        "image_ids": ["IMG_3915"],
+        "stages": ["preprocess"],
+    })
+    assert response.status_code == 200
+    data = response.json()
+    assert "job_id" in data
+    assert isinstance(data["job_id"], str)
+
+
+def test_process_rejects_empty_images():
+    response = client.post("/api/process", json={
+        "image_ids": [],
+        "stages": ["preprocess"],
+    })
+    assert response.status_code == 422
+
+
+def test_get_job_returns_status():
+    create = client.post("/api/process", json={
+        "image_ids": ["IMG_3915"],
+        "stages": ["preprocess"],
+    })
+    job_id = create.json()["job_id"]
+    response = client.get(f"/api/jobs/{job_id}")
+    assert response.status_code == 200
+    data = response.json()
+    assert "job_id" in data
+    assert "status" in data
+    assert "total" in data
+    assert "completed" in data
+    assert "results" in data
+
+
+def test_get_job_unknown_id_returns_404():
+    response = client.get("/api/jobs/nonexistent-id")
+    assert response.status_code == 404
