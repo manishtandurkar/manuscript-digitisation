@@ -98,7 +98,8 @@ This repository implements an end-to-end pipeline to digitise historical inscrip
      - Stage panel: choose individual stages or run full pipeline
      - Results page: per-image cards with **before/after comparison slider** (drag to reveal), status badges, lightbox for full-size viewing
      - Job polling every 2 s; results render incrementally as stages complete
-   - ✅ **API tests** (`tests/test_api.py`) — 11 tests covering all endpoints and background job completion
+   - ✅ **API tests** (`tests/test_api.py`) — 12 tests covering all endpoints, background job completion, and enhance stage routing
+   - ✅ **Pipeline adapter** now routes `enhance` stage to `_run_enhance()`: prefers preprocessed input, falls back to raw, outputs `{id}_enhanced.jpg`
 
 **6. Documentation**
    - ✅ **AGENTS.md** — comprehensive project specification (15,000+ words)
@@ -114,16 +115,17 @@ This repository implements an end-to-end pipeline to digitise historical inscrip
 
 ### 🔄 In Progress / To-Do
 
-**2. Stage 2 — Enhancement (`src/enhance.py`) — NEXT PRIORITY**
-   - 🔲 `denoise()` — non-local means denoising (cv2.fastNlMeansDenoisingColored)
-   - 🔲 `enhance_with_realesrgan()` — Real-ESRGAN super-resolution (2x/4x)
-   - 🔲 `dstretch()` — decorrelation stretch for faded pigment (DStretch algorithm by Jon Harman)
-   - 🔲 `sharpen()` — unsharp mask sharpening for crisp character edges
-   - 🔲 `enhance()` — full pipeline orchestration
-   - 🔲 Model weight loading and GPU detection (CUDA/CPU)
-   - 🔲 Batch enhancement with tile-based processing (prevents OOM on large images)
-   - 🔲 CLI with argparse for --input, --output, --model selection, --use-dstretch
-   - 🔲 Comprehensive tests
+**2. Stage 2 — Enhancement (`src/enhance.py`) — NEW ✅**
+   - ✅ `denoise(img, strength=10)` — non-local means denoising (`cv2.fastNlMeansDenoisingColored`)
+   - ✅ `dstretch(img, colour_space="LAB")` — decorrelation stretch via eigenvalue decomposition; reveals faded pigment invisible to the eye; guards against near-uniform images
+   - ✅ `sharpen(img, amount=1.5)` — unsharp mask via GaussianBlur + addWeighted
+   - ✅ `enhance_with_realesrgan(img, scale=2, model_path)` — Real-ESRGAN super-resolution (4x model, 2x output to avoid over-smoothing); auto-downloads weights on first run; lazy import of `basicsr`/`realesrgan` for graceful fallback
+   - ✅ `enhance(img_path, output_path, use_dstretch=False)` — full chain: `denoise → (Real-ESRGAN OR dstretch) → sharpen`; degrades gracefully if Real-ESRGAN unavailable
+   - ✅ `build_output_path(input_path, output_dir)` — returns `{stem}_enhanced.jpg`
+   - ✅ Graceful fallback: if `basicsr`/`realesrgan` not installed, enhancement runs via OpenCV only (no crash)
+   - ✅ Output: `data/enhanced/{stem}_enhanced.jpg` (JPEG quality=95)
+   - ✅ Pipeline chaining: prefers `{stem}_preprocessed.jpg` as input; falls back to raw image
+   - ✅ 13 tests in `tests/test_enhance.py` — shape/dtype, dstretch contrast increase, solid-colour guard, sharpness verification, Real-ESRGAN mocked tests
 
 **3. Stage 3 — Binarisation (`src/binarise.py`)**
    - 🔲 `binarise_sauvola()` — Sauvola local thresholding (PREFERRED for inscriptions)
@@ -210,7 +212,7 @@ This repository implements an end-to-end pipeline to digitise historical inscrip
    - 🔲 Histogram comparison plots (before/after enhancement)
 
 **9. Dependencies & Environment**
-   - ✅ `requirements.txt` — fastapi, uvicorn, httpx, opencv-python, numpy, Pillow
+   - ✅ `requirements.txt` — fastapi, uvicorn, httpx, opencv-python, numpy, Pillow, scikit-image, basicsr, realesrgan, torch, torchvision
    - 🔲 `environment.yml` for Conda users
    - 🔲 Add GPU detection and optional CUDA setup guide
 
@@ -304,7 +306,7 @@ C:\Projects\IDP\Project\
 ├── src\
 │   ├── __init__.py
 │   ├── preprocess.py                  (✅ Stage 1: implemented)
-│   ├── enhance.py                     (🔲 Stage 2)
+│   ├── enhance.py                     (✅ Stage 2: implemented)
 │   ├── binarise.py                    (🔲 Stage 3)
 │   ├── ocr.py                         (🔲 Stage 4)
 │   ├── translate.py                   (🔲 Stage 5; Phase 2)
@@ -321,7 +323,7 @@ C:\Projects\IDP\Project\
 │   ├── __init__.py
 │   ├── test_preprocess.py             (✅ 4 tests passing)
 │   ├── test_api.py                    (✅ 11 API tests passing)
-│   ├── test_enhance.py                (🔲 to be written)
+│   ├── test_enhance.py                (✅ 13 tests passing)
 │   ├── test_binarise.py               (🔲 to be written)
 │   ├── test_ocr.py                    (🔲 to be written)
 │   └── sample_images\                 (← test fixtures)
@@ -629,6 +631,28 @@ python -m src.preprocess `
   --log-level DEBUG
 ```
 
+### 3b. Enhancement (Stage 2)
+
+```python
+from src.enhance import enhance, build_output_path
+from pathlib import Path
+
+# Enhance a preprocessed image (Real-ESRGAN if weights present, OpenCV fallback otherwise)
+enhance(
+    img_path=r"data\enhanced\IMG_3941_preprocessed.jpg",
+    output_path=r"data\enhanced\IMG_3941_enhanced.jpg",
+)
+
+# Use DStretch instead of Real-ESRGAN (best for cave/rock paintings)
+enhance(
+    img_path=r"data\enhanced\IMG_3941_preprocessed.jpg",
+    output_path=r"data\enhanced\IMG_3941_enhanced.jpg",
+    use_dstretch=True,
+)
+```
+
+Or via the web UI: select images → check **Enhance** → Run. The enhancement stage automatically picks up the preprocessed output from Stage 1.
+
 ### 4. Python API (for scripting)
 
 ```python
@@ -670,7 +694,7 @@ Open `http://localhost:5173` in your browser.
 | Stage | File | Status | Description |
 |-------|------|--------|-------------|
 | 1 | `src/preprocess.py` | ✅ | EXIF orientation correction, CLAHE normalisation, white balance, crop borders → JPEG output |
-| 2 | `src/enhance.py` | 🔲 | Denoise, Real-ESRGAN, DStretch, sharpen |
+| 2 | `src/enhance.py` | ✅ | Denoise, Real-ESRGAN super-resolution (2x), DStretch, sharpen — graceful fallback if torch not installed |
 | 3 | `src/binarise.py` | 🔲 | Sauvola/Otsu thresholding, morphological ops, noise removal |
 | 4 | `src/ocr.py` | 🔲 | Script detection, Tesseract+EasyOCR ensemble, confidence scoring |
 | 5 | `src/translate.py` | 🔲 | MT + LLM-based translation (Phase 2) |
@@ -799,5 +823,5 @@ python -m src.preprocess --input ... --output ... --log-level DEBUG
 
 ---
 
-*Last updated: April 19, 2026*  
+*Last updated: April 19, 2026 — Stage 2 Enhancement implemented.*  
 *For the latest implementation status, see "Implementation Progress" section above.*
