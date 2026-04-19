@@ -67,10 +67,10 @@ outputs/exports/**/*.pdf
 outputs/logs/**/*.log
 outputs/logs/**/*.md
 
-# Model weights (download separately)
-# models/weights/**/*.pth
-# models/weights/**/*.pt
-# models/weights/**/*.bin
+# Model weights (download separately — auto-downloaded by src/enhance.py on first run)
+models/weights/**/*.pth
+models/weights/**/*.pt
+models/weights/**/*.bin
 
 # Environment variables
 .env
