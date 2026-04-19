@@ -3,7 +3,6 @@ from __future__ import annotations
 import logging
 import urllib.request
 from pathlib import Path
-from typing import Optional
 
 import cv2
 import numpy as np
@@ -81,7 +80,7 @@ def _build_upsampler(model_path: str):
 def enhance_with_realesrgan(
     img: np.ndarray,
     scale: int = 2,
-    model_path: str = str(DEFAULT_MODEL_PATH),
+    model_path: str | Path = DEFAULT_MODEL_PATH,
 ) -> np.ndarray:
     """Super-resolution via Real-ESRGAN. outscale=2 avoids over-smoothing."""
     mp = Path(model_path)
@@ -91,4 +90,4 @@ def enhance_with_realesrgan(
     upsampler = _build_upsampler(str(mp))
     img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
     output_rgb, _ = upsampler.enhance(img_rgb, outscale=scale)
-    return cv2.cvtColor(output_rgb, cv2.COLOR_RGB2BGR)
+    return cv2.cvtColor(output_rgb, cv2.COLOR_RGB2BGR).astype(np.uint8)
