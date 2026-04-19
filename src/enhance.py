@@ -117,7 +117,7 @@ def enhance(
     else:
         try:
             img = enhance_with_realesrgan(img)
-        except (ImportError, Exception) as exc:
+        except Exception as exc:  # ImportError when basicsr not installed; RuntimeError for GPU/model errors
             LOGGER.warning("Real-ESRGAN unavailable (%s) — skipping super-resolution.", exc)
 
     img = sharpen(img)
