@@ -117,3 +117,55 @@ def test_enhance_with_realesrgan_returns_bgr(monkeypatch, tmp_path):
     out = enhance_mod.enhance_with_realesrgan(img, model_path=str(fake_pth))
     assert out.dtype == np.uint8
     assert len(out.shape) == 3
+
+
+def test_enhance_end_to_end_no_realesrgan(monkeypatch, tmp_path):
+    """enhance() completes successfully even when Real-ESRGAN is unavailable."""
+    from src import enhance as enhance_mod
+
+    def _raise(*args, **kwargs):
+        raise ImportError("torch not installed")
+
+    monkeypatch.setattr(enhance_mod, "enhance_with_realesrgan", _raise)
+
+    src_img = np.random.randint(0, 256, (64, 64, 3), dtype=np.uint8)
+    input_path = tmp_path / "test_input.jpg"
+    cv2.imwrite(str(input_path), src_img)
+
+    output_path = tmp_path / "test_output.jpg"
+    result = enhance_mod.enhance(str(input_path), str(output_path))
+
+    assert output_path.exists()
+    assert result.dtype == np.uint8
+    assert result.shape[2] == 3
+
+
+def test_enhance_dstretch_path(monkeypatch, tmp_path):
+    """enhance() with use_dstretch=True calls dstretch."""
+    from src import enhance as enhance_mod
+
+    called = {}
+    real_dstretch = enhance_mod.dstretch
+
+    def tracking_dstretch(img, colour_space="LAB"):
+        called["dstretch"] = True
+        return real_dstretch(img, colour_space)
+
+    monkeypatch.setattr(enhance_mod, "dstretch", tracking_dstretch)
+
+    src_img = np.random.randint(0, 256, (64, 64, 3), dtype=np.uint8)
+    input_path = tmp_path / "cave.jpg"
+    cv2.imwrite(str(input_path), src_img)
+
+    output_path = tmp_path / "cave_enhanced.jpg"
+    enhance_mod.enhance(str(input_path), str(output_path), use_dstretch=True)
+
+    assert called.get("dstretch") is True
+    assert output_path.exists()
+
+
+def test_build_output_path():
+    from src.enhance import build_output_path
+    from pathlib import Path
+    result = build_output_path(Path("/data/raw/IMG_001.jpg"), Path("/data/enhanced"))
+    assert result == Path("/data/enhanced/IMG_001_enhanced.jpg")

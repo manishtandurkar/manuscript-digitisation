@@ -91,3 +91,40 @@ def enhance_with_realesrgan(
     img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
     output_rgb, _ = upsampler.enhance(img_rgb, outscale=scale)
     return cv2.cvtColor(output_rgb, cv2.COLOR_RGB2BGR).astype(np.uint8)
+
+
+def build_output_path(input_path: Path, output_dir: Path) -> Path:
+    """Returns output_dir / {stem}_enhanced.jpg"""
+    return Path(output_dir) / f"{Path(input_path).stem}_enhanced.jpg"
+
+
+def enhance(
+    img_path: str,
+    output_path: str,
+    use_dstretch: bool = False,
+) -> np.ndarray:
+    """Full enhancement chain. Degrades gracefully if Real-ESRGAN unavailable."""
+    from src.utils import save_image
+
+    img = cv2.imread(str(img_path))
+    if img is None:
+        raise FileNotFoundError(f"Cannot read image: {img_path}")
+
+    img = denoise(img)
+
+    if use_dstretch:
+        img = dstretch(img)
+    else:
+        try:
+            img = enhance_with_realesrgan(img)
+        except (ImportError, Exception) as exc:
+            LOGGER.warning("Real-ESRGAN unavailable (%s) — skipping super-resolution.", exc)
+
+    img = sharpen(img)
+
+    out = Path(output_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    save_image(out, img)
+
+    LOGGER.info("Enhanced %s → %s", img_path, out)
+    return img
