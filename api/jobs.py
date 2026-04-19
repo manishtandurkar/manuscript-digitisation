@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import threading
 import uuid
 
@@ -28,7 +29,7 @@ def create_job(image_ids: list[str], stages: list[str]) -> str:
 def get_job(job_id: str) -> dict | None:
     with _lock:
         job = _jobs.get(job_id)
-        return dict(job) if job else None
+        return copy.deepcopy(job) if job else None
 
 
 def update_stage(job_id: str, image_id: str, stage: str, result: dict) -> None:
