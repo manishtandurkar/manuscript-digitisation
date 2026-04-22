@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from functools import lru_cache
 import logging
 import urllib.request
 from pathlib import Path
@@ -77,6 +78,11 @@ def _build_upsampler(model_path: str):
     )
 
 
+@lru_cache(maxsize=2)
+def _get_upsampler(model_path: str):
+    return _build_upsampler(model_path)
+
+
 def enhance_with_realesrgan(
     img: np.ndarray,
     scale: int = 2,
@@ -87,7 +93,7 @@ def enhance_with_realesrgan(
     if not mp.exists():
         _download_weights(mp)
 
-    upsampler = _build_upsampler(str(mp))
+    upsampler = _get_upsampler(str(mp.resolve()))
     img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
     output_rgb, _ = upsampler.enhance(img_rgb, outscale=scale)
     return cv2.cvtColor(output_rgb, cv2.COLOR_RGB2BGR).astype(np.uint8)

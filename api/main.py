@@ -9,14 +9,14 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, field_validator
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
-RAW_DIR = _PROJECT_ROOT / "data" / "raw"
 DATA_DIR = _PROJECT_ROOT / "data"
-IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".tif", ".tiff"}
 
 
 class ImageMeta(BaseModel):
     id: str
     filename: str
+    language: str
+    collection: str
     url: str
     thumbnail_url: str
 
@@ -36,16 +36,22 @@ if DATA_DIR.exists():
 
 @app.get("/api/images", response_model=list[ImageMeta])
 def list_images() -> list[ImageMeta]:
+    from api.pipeline import RAW_DIR, image_id_for_path, list_raw_images
+
     images = []
-    for path in sorted(RAW_DIR.rglob("*")):
-        if path.is_file() and path.suffix.lower() in IMAGE_SUFFIXES:
-            relative = path.relative_to(DATA_DIR)
-            images.append(ImageMeta(
-                id=path.stem,
-                filename=path.name,
-                url=f"/data/{relative.as_posix()}",
-                thumbnail_url=f"/api/images/{path.stem}/thumbnail",
-            ))
+    for path in list_raw_images():
+        relative = path.relative_to(DATA_DIR)
+        raw_relative = path.relative_to(RAW_DIR)
+        collection = raw_relative.parts[0] if len(raw_relative.parts) > 1 else "raw"
+        language = collection.split("_", 1)[0].replace("-", " ").title()
+        images.append(ImageMeta(
+            id=image_id_for_path(path),
+            filename=path.name,
+            language=language,
+            collection=collection,
+            url=f"/data/{relative.as_posix()}",
+            thumbnail_url=f"/api/images/{image_id_for_path(path)}/thumbnail",
+        ))
     return images
 
 

@@ -1,6 +1,8 @@
 export interface ImageMeta {
   id: string;
   filename: string;
+  language: string;
+  collection: string;
   url: string;
   thumbnail_url: string;
 }

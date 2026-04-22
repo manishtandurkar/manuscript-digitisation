@@ -17,12 +17,15 @@ export default function ImageCard({ image, selected, onToggle }: Props) {
       }`}
     >
       <img
-        src={image.url}
+        src={image.thumbnail_url || image.url}
         alt={image.filename}
         className="w-full h-36 object-cover bg-gray-800"
         loading="lazy"
+        decoding="async"
+        fetchPriority="low"
       />
       <div className="px-2 py-1 bg-gray-900">
+        <p className="text-[11px] font-medium text-indigo-300 truncate">{image.language}</p>
         <p className="text-xs text-gray-300 truncate">{image.filename}</p>
       </div>
       {selected && (

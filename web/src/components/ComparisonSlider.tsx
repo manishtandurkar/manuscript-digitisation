@@ -8,7 +8,7 @@ interface Props {
 }
 
 export default function ComparisonSlider({ before, after, afterLabel, height = "h-72" }: Props) {
-  const [position, setPosition] = useState(50);
+  const [position, setPosition] = useState(25);
 
   return (
     <div className={`relative overflow-hidden rounded-xl ${height} select-none bg-gray-800`}>

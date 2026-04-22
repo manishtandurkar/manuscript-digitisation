@@ -99,3 +99,5 @@ Thumbs.db
 logs/
 
 .claude/
+data/
+.venv/

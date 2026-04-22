@@ -9,6 +9,7 @@ from api.pipeline import run_stage
 
 _jobs: dict[str, dict] = {}
 _lock = threading.Lock()
+_enhance_gate = threading.Semaphore(1)
 
 
 def create_job(image_ids: list[str], stages: list[str]) -> str:
@@ -39,6 +40,12 @@ def update_stage(job_id: str, image_id: str, stage: str, result: dict) -> None:
         _jobs[job_id]["results"][image_id][stage] = result
 
 
+def mark_job_failed(job_id: str) -> None:
+    with _lock:
+        if job_id in _jobs:
+            _jobs[job_id]["status"] = "failed"
+
+
 def mark_image_done(job_id: str) -> None:
     with _lock:
         _jobs[job_id]["completed"] += 1
@@ -47,10 +54,26 @@ def mark_image_done(job_id: str) -> None:
 
 
 def _process_image(job_id: str, image_id: str, stages: list[str]) -> None:
-    for stage in stages:
-        result = run_stage(image_id, stage)
-        update_stage(job_id, image_id, stage, result)
-    mark_image_done(job_id)
+    current_stage: str | None = None
+    try:
+        for stage in stages:
+            current_stage = stage
+            update_stage(job_id, image_id, stage, {"status": "running"})
+
+            if stage == "enhance":
+                with _enhance_gate:
+                    result = run_stage(image_id, stage)
+            else:
+                result = run_stage(image_id, stage)
+
+            update_stage(job_id, image_id, stage, result)
+
+        mark_image_done(job_id)
+    except Exception as exc:
+        # Guard against unexpected thread failures so jobs never stay "running" forever.
+        if current_stage is not None:
+            update_stage(job_id, image_id, current_stage, {"status": "failed", "error": str(exc)})
+        mark_job_failed(job_id)
 
 
 def start_job(job_id: str, image_ids: list[str], stages: list[str]) -> None:

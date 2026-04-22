@@ -138,12 +138,14 @@ function StageResult({
 function ImageResultCard({
   imageId,
   stageResults,
+  imageMeta,
   originalUrl,
   thumbnailUrl,
   onExpand,
 }: {
   imageId: string;
   stageResults: Record<string, StageResult>;
+  imageMeta?: ImageMeta;
   originalUrl: string;
   thumbnailUrl: string;
   onExpand: (url: string) => void;
@@ -180,7 +182,10 @@ function ImageResultCard({
 
         {/* Metadata */}
         <div className="flex-1 px-5 py-4 flex flex-col justify-center gap-1.5">
-          <p className="font-semibold text-gray-100 text-base">{imageId}</p>
+          <p className="font-semibold text-gray-100 text-base">{imageMeta?.filename ?? imageId}</p>
+          {imageMeta && (
+            <p className="text-xs text-indigo-300 font-medium">{imageMeta.language}</p>
+          )}
           <p className="text-xs text-gray-500">
             {doneCount} of {totalCount} stage{totalCount !== 1 ? "s" : ""} complete
           </p>
@@ -254,13 +259,14 @@ export default function ResultViewer({ job }: Props) {
       {Object.entries(job.results).map(([imageId, stageResults]) => {
         const meta = imageMap[imageId];
         const originalUrl = meta?.url ?? "";
-        const thumbnailUrl = meta?.url ?? "";
+        const thumbnailUrl = meta?.thumbnail_url ?? meta?.url ?? "";
 
         return (
           <ImageResultCard
             key={imageId}
             imageId={imageId}
             stageResults={stageResults}
+            imageMeta={meta}
             originalUrl={originalUrl}
             thumbnailUrl={thumbnailUrl}
             onExpand={setLightboxUrl}
