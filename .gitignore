@@ -49,6 +49,7 @@ Thumbs.db
 htmlcov/
 .tox/
 .hypothesis/
+tmp_test/
 
 # Project-specific data (large files, generated outputs)
 data/raw/**/*.jpg

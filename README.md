@@ -40,7 +40,7 @@ This repository implements an end-to-end pipeline to digitise historical inscrip
 
 ---
 
-## Implementation Progress (as of April 19, 2026)
+## Implementation Progress (as of April 25, 2026)
 
 ### ✅ Completed
 
@@ -69,7 +69,7 @@ This repository implements an end-to-end pipeline to digitise historical inscrip
    - ✅ `test_preprocess_writes_output()` — verifies JPEG output is written
    - ✅ `test_process_directory_writes_expected_output_name()` — batch processing output naming
    - ✅ All tests use temporary directories and real sample image (`data/raw/tamil_stone/IMG_3941.jpg`)
-   - ✅ Can run with: `pytest -q` or `python -m unittest`
+   - ✅ Can run with: `pytest -q`
 
 **4. Project Folder Structure**
    - ✅ `data/raw/` — read-only original scanned images
@@ -84,7 +84,7 @@ This repository implements an end-to-end pipeline to digitise historical inscrip
    - ✅ `src/__init__.py` — package marker
    - ✅ Sample image: `data/raw/tamil_stone/IMG_3941.jpg` (Tamil stone inscription)
 
-**5. Web UI (`api/` + `web/`) — NEW**
+**5. Web UI (`api/` + `web/`)**
    - ✅ **FastAPI backend** (`api/main.py`) — REST endpoints wrapping the pipeline:
      - `GET /api/images` — lists all raw images in `data/raw/` (recursive, returns id/filename/url)
      - `POST /api/process` — starts a processing job (returns `job_id`), spawns background threads per image
@@ -113,9 +113,7 @@ This repository implements an end-to-end pipeline to digitise historical inscrip
 
 ---
 
-### 🔄 In Progress / To-Do
-
-**2. Stage 2 — Enhancement (`src/enhance.py`) — NEW ✅**
+**2. Stage 2 — Enhancement (`src/enhance.py`) — ✅**
    - ✅ `denoise(img, strength=10)` — non-local means denoising (`cv2.fastNlMeansDenoisingColored`)
    - ✅ `dstretch(img, colour_space="LAB")` — decorrelation stretch via eigenvalue decomposition; reveals faded pigment invisible to the eye; guards against near-uniform images
    - ✅ `sharpen(img, amount=1.5)` — unsharp mask via GaussianBlur + addWeighted
@@ -127,14 +125,19 @@ This repository implements an end-to-end pipeline to digitise historical inscrip
    - ✅ Pipeline chaining: prefers `{stem}_preprocessed.jpg` as input; falls back to raw image
    - ✅ 13 tests in `tests/test_enhance.py` — shape/dtype, dstretch contrast increase, solid-colour guard, sharpness verification, Real-ESRGAN mocked tests
 
-**3. Stage 3 — Binarisation (`src/binarise.py`)**
-   - 🔲 `binarise_sauvola()` — Sauvola local thresholding (PREFERRED for inscriptions)
-   - 🔲 `binarise_otsu()` — Otsu global thresholding (fast, for clean paper)
-   - 🔲 `binarise_adaptive()` — OpenCV adaptive mean thresholding (fallback)
-   - 🔲 `remove_noise_blobs()` — morphological noise removal (size-based filtering)
-   - 🔲 Morphological closing to reconnect broken character strokes
-   - 🔲 `binarise()` — stage orchestration with method selection
-   - 🔲 CLI and comprehensive tests
+**3. Stage 3 — Binarisation (`src/binarise.py`) — ✅**
+   - ✅ `binarise_sauvola(img, window_size=25)` — Sauvola local thresholding via scikit-image (default; best for uneven backgrounds: stone, palm leaf)
+   - ✅ `binarise_otsu(img)` — Otsu global thresholding (fast, good for clean paper manuscripts)
+   - ✅ `binarise_adaptive(img)` — OpenCV adaptive mean thresholding (fallback for mixed quality)
+   - ✅ `remove_noise_blobs(binary, min_size=50)` — connected-component filtering; removes specks smaller than `min_size` pixels
+   - ✅ Morphological closing (`cv2.MORPH_CLOSE`, 2×2 kernel) applied after every thresholding method to reconnect broken character strokes
+   - ✅ `binarise(img_path, output_path, method="sauvola")` — full chain: greyscale conversion → threshold → morph close → noise removal → save PNG
+   - ✅ Output: `data/binarised/{stem}_binarised.png` (**PNG, lossless** — not JPEG)
+   - ✅ Pipeline chaining: prefers `{stem}_enhanced.jpg` as input; falls back to raw image
+   - ✅ Full argparse CLI (single/batch modes with `--method`, `--pattern`, `--log-level`)
+   - ✅ 15 tests in `tests/test_binarise.py` — binary-only pixel values (0/255), noise blob removal, PNG output, all three methods, error handling
+
+### 🔄 To-Do
 
 **4. Stage 4 — OCR & Transcription (`src/ocr.py`)**
    - 🔲 Script detection (heuristic or ML-based) — returns script name string
@@ -307,7 +310,7 @@ C:\Projects\IDP\Project\
 │   ├── __init__.py
 │   ├── preprocess.py                  (✅ Stage 1: implemented)
 │   ├── enhance.py                     (✅ Stage 2: implemented)
-│   ├── binarise.py                    (🔲 Stage 3)
+│   ├── binarise.py                    (✅ Stage 3: implemented)
 │   ├── ocr.py                         (🔲 Stage 4)
 │   ├── translate.py                   (🔲 Stage 5; Phase 2)
 │   ├── record.py                      (🔲 Stage 6)
@@ -324,7 +327,7 @@ C:\Projects\IDP\Project\
 │   ├── test_preprocess.py             (✅ 4 tests passing)
 │   ├── test_api.py                    (✅ 11 API tests passing)
 │   ├── test_enhance.py                (✅ 13 tests passing)
-│   ├── test_binarise.py               (🔲 to be written)
+│   ├── test_binarise.py               (✅ 15 tests passing)
 │   ├── test_ocr.py                    (🔲 to be written)
 │   └── sample_images\                 (← test fixtures)
 │
@@ -653,6 +656,40 @@ enhance(
 
 Or via the web UI: select images → check **Enhance** → Run. The enhancement stage automatically picks up the preprocessed output from Stage 1.
 
+### 3c. Binarisation (Stage 3)
+
+```powershell
+# Single image (default: Sauvola — best for stone/palm leaf)
+python -m src.binarise single data\enhanced\IMG_3941_enhanced.jpg data\binarised\IMG_3941_binarised.png
+
+# Choose method: sauvola | otsu | adaptive
+python -m src.binarise single data\enhanced\IMG_3941_enhanced.jpg data\binarised\IMG_3941_binarised.png --method otsu
+
+# Batch
+python -m src.binarise batch data\enhanced data\binarised --pattern "*_enhanced.jpg"
+```
+
+Or in Python:
+
+```python
+from src.binarise import binarise
+
+# Sauvola (default — preferred for inscriptions)
+binarise(
+    img_path=r"data\enhanced\IMG_3941_enhanced.jpg",
+    output_path=r"data\binarised\IMG_3941_binarised.png",
+)
+
+# Otsu (fast, good for clean paper)
+binarise(
+    img_path=r"data\enhanced\IMG_3941_enhanced.jpg",
+    output_path=r"data\binarised\IMG_3941_binarised.png",
+    method="otsu",
+)
+```
+
+Or via the web UI: select images → check **Binarise** → Run. The stage automatically uses the enhanced output from Stage 2 as input.
+
 ### 4. Python API (for scripting)
 
 ```python
@@ -695,7 +732,7 @@ Open `http://localhost:5173` in your browser.
 |-------|------|--------|-------------|
 | 1 | `src/preprocess.py` | ✅ | EXIF orientation correction, CLAHE normalisation, white balance, crop borders → JPEG output |
 | 2 | `src/enhance.py` | ✅ | Denoise, Real-ESRGAN super-resolution (2x), DStretch, sharpen — graceful fallback if torch not installed |
-| 3 | `src/binarise.py` | 🔲 | Sauvola/Otsu thresholding, morphological ops, noise removal |
+| 3 | `src/binarise.py` | ✅ | Sauvola/Otsu/adaptive thresholding, morphological closing, noise removal → PNG output |
 | 4 | `src/ocr.py` | 🔲 | Script detection, Tesseract+EasyOCR ensemble, confidence scoring |
 | 5 | `src/translate.py` | 🔲 | MT + LLM-based translation (Phase 2) |
 | 6 | `src/record.py` | 🔲 | Assemble JSON records, export PDFs |
@@ -733,23 +770,17 @@ Recommended minimum thresholds for processed images:
 
 ## Running Tests
 
-Run all unit tests:
+Run all unit tests (44 tests across preprocess, enhance, binarise, api):
 
 ```powershell
 pip install pytest
 pytest -q
 ```
 
-Or using unittest directly:
-
-```powershell
-python -m unittest discover tests -v
-```
-
 Run a specific test file:
 
 ```powershell
-pytest tests/test_preprocess.py -v
+pytest tests/test_binarise.py -v
 ```
 
 Run a specific test:
@@ -823,5 +854,5 @@ python -m src.preprocess --input ... --output ... --log-level DEBUG
 
 ---
 
-*Last updated: April 19, 2026 — Stage 2 Enhancement implemented.*  
+*Last updated: April 25, 2026 — Stage 3 Binarisation implemented.*  
 *For the latest implementation status, see "Implementation Progress" section above.*
