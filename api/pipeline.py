@@ -7,6 +7,7 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 RAW_DIR = _PROJECT_ROOT / "data" / "raw"
 PREPROCESSED_DIR = _PROJECT_ROOT / "data" / "preprocessed"
 ENHANCED_DIR = _PROJECT_ROOT / "data" / "enhanced"
+BINARISED_DIR = _PROJECT_ROOT / "data" / "binarised"
 THUMB_DIR = _PROJECT_ROOT / "data" / "thumbnails"
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".avif", ".webp"}
 THUMB_MAX_PX = 400
@@ -80,6 +81,8 @@ def run_stage(image_id: str, stage: str) -> dict:
         return _run_preprocess(image_id)
     if stage == "enhance":
         return _run_enhance(image_id)
+    if stage == "binarise":
+        return _run_binarise(image_id)
     return {"status": "skipped", "reason": f"Stage '{stage}' not yet implemented"}
 
 
@@ -121,6 +124,29 @@ def _run_enhance(image_id: str) -> dict:
         return {
             "status": "done",
             "url": f"/data/enhanced/{output_path.name}",
+        }
+    except Exception as exc:
+        return {"status": "failed", "error": str(exc)}
+
+
+def _run_binarise(image_id: str) -> dict:
+    from src.binarise import binarise
+
+    # Prefer enhanced output as input; fall back to raw image
+    enhanced = ENHANCED_DIR / f"{_safe_output_stem(image_id)}_enhanced.jpg"
+    src_path = enhanced if enhanced.exists() else _find_raw_path(image_id)
+
+    if src_path is None:
+        return {"status": "failed", "error": f"No image found for id '{image_id}'"}
+
+    BINARISED_DIR.mkdir(parents=True, exist_ok=True)
+    output_path = BINARISED_DIR / f"{_safe_output_stem(image_id)}_binarised.png"
+
+    try:
+        binarise(str(src_path), str(output_path))
+        return {
+            "status": "done",
+            "url": f"/data/binarised/{output_path.name}",
         }
     except Exception as exc:
         return {"status": "failed", "error": str(exc)}
