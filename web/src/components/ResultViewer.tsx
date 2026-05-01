@@ -55,6 +55,17 @@ function Lightbox({ src, onClose }: { src: string; onClose: () => void }) {
   );
 }
 
+const METHOD_LABELS: Record<string, string> = {
+  sauvola: "Sauvola",
+  otsu: "Otsu",
+  adaptive: "Adaptive",
+};
+
+const ENHANCE_MODE_LABELS: Record<string, string> = {
+  dstretch: "DStretch",
+  superres: "Super-res",
+};
+
 function StageResult({
   stage,
   result,
@@ -72,7 +83,19 @@ function StageResult({
     <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
       {/* Stage header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-gray-800 bg-gray-900/80">
-        <span className="text-sm font-semibold text-gray-200">{label}</span>
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-semibold text-gray-200">{label}</span>
+          {stage === "binarise" && result.method && (
+            <span className="text-xs px-2 py-0.5 rounded-full border font-medium bg-gray-800 text-gray-500 border-gray-700">
+              {METHOD_LABELS[result.method] ?? result.method}
+            </span>
+          )}
+          {stage === "enhance" && result.mode && (
+            <span className="text-xs px-2 py-0.5 rounded-full border font-medium bg-gray-800 text-gray-500 border-gray-700">
+              {ENHANCE_MODE_LABELS[result.mode] ?? result.mode}
+            </span>
+          )}
+        </div>
         <StatusBadge status={result.status} />
       </div>
 

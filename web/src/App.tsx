@@ -43,10 +43,13 @@ export default function App() {
   const { data: job } = useJob(jobId);
   const isRunning = job?.status === "running";
 
-  const handleRun = useCallback(async (stages: StageName[]) => {
+  const handleRun = useCallback(async (
+    stages: StageName[],
+    stageOptions: Record<string, Record<string, string>> = {}
+  ) => {
     setError(null);
     try {
-      const { job_id } = await processImages(Array.from(selected), stages);
+      const { job_id } = await processImages(Array.from(selected), stages, stageOptions);
       setJobId(job_id);
       setView("results");
     } catch (err) {
@@ -61,8 +64,7 @@ export default function App() {
       <aside className="w-56 flex-shrink-0 bg-gray-900 border-r border-gray-800 flex flex-col">
         {/* Branding */}
         <div className="px-4 py-5 border-b border-gray-800">
-          <h1 className="text-sm font-bold text-white leading-tight">Inscription<br />Digitisation</h1>
-          <p className="text-xs text-gray-500 mt-1">IDP Pipeline</p>
+          <h1 className="text-sm font-bold text-white leading-tight">Inscription Digitisation</h1>
         </div>
 
         {/* Nav */}

@@ -67,6 +67,7 @@ def get_thumbnail(image_id: str) -> FileResponse:
 class ProcessRequest(BaseModel):
     image_ids: list[str]
     stages: list[str]
+    stage_options: dict[str, dict[str, str]] = {}
 
     @field_validator("image_ids")
     @classmethod
@@ -79,8 +80,8 @@ class ProcessRequest(BaseModel):
 @app.post("/api/process")
 def start_process(req: ProcessRequest) -> dict:
     from api.jobs import create_job, start_job
-    job_id = create_job(req.image_ids, req.stages)
-    start_job(job_id, req.image_ids, req.stages)
+    job_id = create_job(req.image_ids, req.stages, req.stage_options)
+    start_job(job_id, req.image_ids, req.stages, req.stage_options)
     return {"job_id": job_id}
 
 

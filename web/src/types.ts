@@ -15,6 +15,8 @@ export interface StageResult {
   text?: string;
   error?: string;
   reason?: string;
+  method?: string;
+  mode?: string;
 }
 
 export type StageName = "preprocess" | "enhance" | "binarise" | "ocr" | "translate";

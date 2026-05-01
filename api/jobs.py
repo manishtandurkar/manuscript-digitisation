@@ -12,7 +12,11 @@ _lock = threading.Lock()
 _enhance_gate = threading.Semaphore(1)
 
 
-def create_job(image_ids: list[str], stages: list[str]) -> str:
+def create_job(
+    image_ids: list[str],
+    stages: list[str],
+    stage_options: dict[str, dict[str, str]] | None = None,
+) -> str:
     job_id = str(uuid.uuid4())
     results = {
         img_id: {stage: {"status": "pending"} for stage in stages}
@@ -25,6 +29,7 @@ def create_job(image_ids: list[str], stages: list[str]) -> str:
             "total": len(image_ids),
             "completed": 0,
             "results": results,
+            "stage_options": stage_options or {},
         }
     return job_id
 
@@ -53,18 +58,24 @@ def mark_image_done(job_id: str) -> None:
             _jobs[job_id]["status"] = "done"
 
 
-def _process_image(job_id: str, image_id: str, stages: list[str]) -> None:
+def _process_image(
+    job_id: str,
+    image_id: str,
+    stages: list[str],
+    stage_options: dict[str, dict[str, str]],
+) -> None:
     current_stage: str | None = None
     try:
         for stage in stages:
             current_stage = stage
             update_stage(job_id, image_id, stage, {"status": "running"})
+            options = stage_options.get(stage, {})
 
             if stage == "enhance":
                 with _enhance_gate:
-                    result = run_stage(image_id, stage)
+                    result = run_stage(image_id, stage, options)
             else:
-                result = run_stage(image_id, stage)
+                result = run_stage(image_id, stage, options)
 
             update_stage(job_id, image_id, stage, result)
 
@@ -76,11 +87,17 @@ def _process_image(job_id: str, image_id: str, stages: list[str]) -> None:
         mark_job_failed(job_id)
 
 
-def start_job(job_id: str, image_ids: list[str], stages: list[str]) -> None:
+def start_job(
+    job_id: str,
+    image_ids: list[str],
+    stages: list[str],
+    stage_options: dict[str, dict[str, str]] | None = None,
+) -> None:
+    opts = stage_options or {}
     for image_id in image_ids:
         t = threading.Thread(
             target=_process_image,
-            args=(job_id, image_id, stages),
+            args=(job_id, image_id, stages, opts),
             daemon=True,
         )
         t.start()

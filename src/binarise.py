@@ -10,32 +10,48 @@ import numpy as np
 LOGGER = logging.getLogger("binarise")
 
 
-def binarise_sauvola(img: np.ndarray, window_size: int = 25) -> np.ndarray:
+def _to_gray(img: np.ndarray) -> np.ndarray:
+    return cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.ndim == 3 else img
+
+
+def _clahe(gray: np.ndarray) -> np.ndarray:
+    """CLAHE equalization — normalises uneven illumination before thresholding."""
+    return cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(gray)
+
+
+def _sauvola_window(gray: np.ndarray) -> int:
+    """Window ~1/20 of shorter dimension, clamped to [15, 51], always odd."""
+    w = max(15, min(gray.shape[0], gray.shape[1]) // 20)
+    return w if w % 2 == 1 else w + 1
+
+
+def binarise_sauvola(img: np.ndarray, window_size: int | None = None) -> np.ndarray:
     """Sauvola local thresholding — best for uneven backgrounds (stone, palm leaf)."""
     from skimage.filters import threshold_sauvola
 
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.ndim == 3 else img
-    thresh = threshold_sauvola(gray, window_size=window_size)
+    gray = _clahe(_to_gray(img))
+    ws = window_size if window_size is not None else _sauvola_window(gray)
+    thresh = threshold_sauvola(gray, window_size=ws)
     binary = (gray > thresh).astype(np.uint8) * 255
-    kernel = np.ones((2, 2), np.uint8)
+    kernel = np.ones((3, 3), np.uint8)
     return cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
 
 
 def binarise_otsu(img: np.ndarray) -> np.ndarray:
     """Otsu global thresholding — fast, good for clean paper manuscripts."""
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.ndim == 3 else img
+    gray = _clahe(_to_gray(img))
     _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    kernel = np.ones((2, 2), np.uint8)
+    kernel = np.ones((3, 3), np.uint8)
     return cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
 
 
 def binarise_adaptive(img: np.ndarray) -> np.ndarray:
     """OpenCV adaptive mean thresholding — fallback for mixed quality images."""
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.ndim == 3 else img
+    gray = _clahe(_to_gray(img))
     binary = cv2.adaptiveThreshold(
         gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY, 15, 8
     )
-    kernel = np.ones((2, 2), np.uint8)
+    kernel = np.ones((3, 3), np.uint8)
     return cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
 
 

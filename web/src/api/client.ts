@@ -8,12 +8,13 @@ export async function listImages(): Promise<ImageMeta[]> {
 
 export async function processImages(
   imageIds: string[],
-  stages: string[]
+  stages: string[],
+  stageOptions: Record<string, Record<string, string>> = {}
 ): Promise<{ job_id: string }> {
   const res = await fetch("/api/process", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ image_ids: imageIds, stages }),
+    body: JSON.stringify({ image_ids: imageIds, stages, stage_options: stageOptions }),
   });
   if (!res.ok) throw new Error(`Failed to start job: ${res.status}`);
   return res.json();

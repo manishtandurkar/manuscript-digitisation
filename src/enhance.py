@@ -108,8 +108,9 @@ def enhance(
     img_path: str,
     output_path: str,
     use_dstretch: bool = False,
+    mode: str = "superres",
 ) -> np.ndarray:
-    """Full enhancement chain. Degrades gracefully if Real-ESRGAN unavailable."""
+    """Full enhancement chain. mode='dstretch' is fast; mode='superres' uses Real-ESRGAN (slow on CPU)."""
     from src.utils import save_image
 
     img = cv2.imread(str(img_path))
@@ -118,7 +119,7 @@ def enhance(
 
     img = denoise(img)
 
-    if use_dstretch:
+    if use_dstretch or mode == "dstretch":
         img = dstretch(img)
     else:
         try:

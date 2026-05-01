@@ -165,3 +165,5 @@ def test_build_output_path():
 
     result = build_output_path(Path("/data/enhanced/IMG_001_enhanced.jpg"), Path("/data/binarised"))
     assert result == Path("/data/binarised/IMG_001_enhanced_binarised.png")
+
+

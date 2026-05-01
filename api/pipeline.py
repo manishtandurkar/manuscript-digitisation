@@ -76,13 +76,14 @@ def _find_raw_path(image_id: str) -> Path | None:
     return _raw_path_index().get(image_id.lower())
 
 
-def run_stage(image_id: str, stage: str) -> dict:
+def run_stage(image_id: str, stage: str, options: dict | None = None) -> dict:
+    opts = options or {}
     if stage == "preprocess":
         return _run_preprocess(image_id)
     if stage == "enhance":
-        return _run_enhance(image_id)
+        return _run_enhance(image_id, mode=opts.get("mode", "superres"))
     if stage == "binarise":
-        return _run_binarise(image_id)
+        return _run_binarise(image_id, method=opts.get("method", "sauvola"))
     return {"status": "skipped", "reason": f"Stage '{stage}' not yet implemented"}
 
 
@@ -106,7 +107,7 @@ def _run_preprocess(image_id: str) -> dict:
         return {"status": "failed", "error": str(exc)}
 
 
-def _run_enhance(image_id: str) -> dict:
+def _run_enhance(image_id: str, mode: str = "superres") -> dict:
     from src.enhance import enhance
 
     # Prefer preprocessed output as input; fall back to raw image
@@ -117,19 +118,25 @@ def _run_enhance(image_id: str) -> dict:
         return {"status": "failed", "error": f"No image found for id '{image_id}'"}
 
     ENHANCED_DIR.mkdir(parents=True, exist_ok=True)
-    output_path = ENHANCED_DIR / f"{_safe_output_stem(image_id)}_enhanced.jpg"
+    stem = _safe_output_stem(image_id)
+    output_path = ENHANCED_DIR / f"{stem}_enhanced_{mode}.jpg"
+
+    # Return cached result if already processed with same mode
+    if output_path.exists():
+        return {"status": "done", "url": f"/data/enhanced/{output_path.name}", "mode": mode}
 
     try:
-        enhance(str(src_path), str(output_path))
+        enhance(str(src_path), str(output_path), mode=mode)
         return {
             "status": "done",
             "url": f"/data/enhanced/{output_path.name}",
+            "mode": mode,
         }
     except Exception as exc:
         return {"status": "failed", "error": str(exc)}
 
 
-def _run_binarise(image_id: str) -> dict:
+def _run_binarise(image_id: str, method: str = "sauvola") -> dict:
     from src.binarise import binarise
 
     # Prefer enhanced output as input; fall back to raw image
@@ -143,10 +150,11 @@ def _run_binarise(image_id: str) -> dict:
     output_path = BINARISED_DIR / f"{_safe_output_stem(image_id)}_binarised.png"
 
     try:
-        binarise(str(src_path), str(output_path))
+        binarise(str(src_path), str(output_path), method=method)
         return {
             "status": "done",
             "url": f"/data/binarised/{output_path.name}",
+            "method": method,
         }
     except Exception as exc:
         return {"status": "failed", "error": str(exc)}
