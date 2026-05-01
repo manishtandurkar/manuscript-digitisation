@@ -133,16 +133,16 @@ function StageResult({
             <p className="text-xs text-gray-500 text-center">← drag slider to compare original vs {label.toLowerCase()} →</p>
             <div className="flex gap-2">
               <button
-                onClick={() => onExpand(originalUrl)}
-                className="flex-1 text-xs text-gray-500 hover:text-gray-200 transition-colors py-1.5 px-3 bg-gray-800 hover:bg-gray-700 rounded-lg"
-              >
-                View original
-              </button>
-              <button
                 onClick={() => onExpand(result.url!)}
                 className="flex-1 text-xs text-indigo-400 hover:text-indigo-300 transition-colors py-1.5 px-3 bg-indigo-950/50 hover:bg-indigo-900/50 rounded-lg border border-indigo-800"
               >
                 View {label.toLowerCase()}
+              </button>
+              <button
+                onClick={() => onExpand(originalUrl)}
+                className="flex-1 text-xs text-gray-500 hover:text-gray-200 transition-colors py-1.5 px-3 bg-gray-800 hover:bg-gray-700 rounded-lg"
+              >
+                View original
               </button>
             </div>
           </div>

@@ -139,9 +139,16 @@ def _run_enhance(image_id: str, mode: str = "superres") -> dict:
 def _run_binarise(image_id: str, method: str = "sauvola") -> dict:
     from src.binarise import binarise
 
-    # Prefer enhanced output as input; fall back to raw image
-    enhanced = ENHANCED_DIR / f"{_safe_output_stem(image_id)}_enhanced.jpg"
-    src_path = enhanced if enhanced.exists() else _find_raw_path(image_id)
+    # Prefer enhanced → preprocessed → raw (enhanced filename includes mode suffix)
+    stem = _safe_output_stem(image_id)
+    enhanced_candidates = sorted(ENHANCED_DIR.glob(f"{stem}_enhanced_*.jpg"))
+    preprocessed = PREPROCESSED_DIR / f"{stem}_preprocessed.jpg"
+    if enhanced_candidates:
+        src_path = enhanced_candidates[-1]  # most recently written mode
+    elif preprocessed.exists():
+        src_path = preprocessed
+    else:
+        src_path = _find_raw_path(image_id)
 
     if src_path is None:
         return {"status": "failed", "error": f"No image found for id '{image_id}'"}

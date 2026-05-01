@@ -60,11 +60,11 @@ export default function ComparisonSlider({ before, after, afterLabel, height = "
       />
 
       {/* Corner labels */}
-      <span className="absolute bottom-2 left-2 text-xs bg-black/60 text-white px-2 py-0.5 rounded-md pointer-events-none">
-        Original
-      </span>
-      <span className="absolute bottom-2 right-2 text-xs bg-indigo-600/80 text-white px-2 py-0.5 rounded-md pointer-events-none">
+      <span className="absolute bottom-2 left-2 text-xs bg-indigo-600/80 text-white px-2 py-0.5 rounded-md pointer-events-none">
         {afterLabel}
+      </span>
+      <span className="absolute bottom-2 right-2 text-xs bg-black/60 text-white px-2 py-0.5 rounded-md pointer-events-none">
+        Original
       </span>
     </div>
   );
