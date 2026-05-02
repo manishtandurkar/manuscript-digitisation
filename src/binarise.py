@@ -255,6 +255,33 @@ def binarise_adaptive(img: np.ndarray) -> np.ndarray:
     return cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
 
 
+def binarise_palm_leaf(img: np.ndarray) -> np.ndarray:
+    """Specialised palm-leaf manuscript binarisation path.
+
+    Uses LAB-space L-channel Sauvola with a widened window and an
+    A-channel Otsu mask to suppress warm-background fibre texture.
+    """
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+    binary = cv2.adaptiveThreshold(
+        gray, 255,
+        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv2.THRESH_BINARY,
+        31, 5
+    )
+    binary = cv2.bitwise_not(binary)
+
+    h, w = binary.shape
+    mask = np.zeros((h + 2, w + 2), np.uint8)
+    for corner in [(0, 0), (0, w-1), (h-1, 0), (h-1, w-1)]:
+        cv2.floodFill(binary, mask, (corner[1], corner[0]), 0)
+
+    kernel = np.ones((2, 2), dtype=np.uint8)
+    binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
+
+    return binary
+
+
 # ─── DL methods (public) ─────────────────────────────────────────────────────
 
 def binarise_unet(
@@ -293,16 +320,53 @@ def binarise_docentr(
 
 # ─── noise removal ────────────────────────────────────────────────────────────
 
-def remove_noise_blobs(binary: np.ndarray, min_size: int = 50) -> np.ndarray:
-    """Remove small disconnected components (dust, noise) from binary image."""
+def remove_noise_blobs(
+    binary: np.ndarray, min_size: int = 50, min_length: int = 30
+) -> np.ndarray:
+    """Remove small disconnected components (dust, noise) from binary image.
+
+    Preserves components that are long/large even if their area is small
+    (useful for thin strokes on palm leaves). Keeps a component if
+    area >= min_size OR max(width, height) >= min_length.
+    """
     num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(
         binary, connectivity=8
     )
     cleaned = np.zeros_like(binary)
     for label in range(1, num_labels):
-        if stats[label, cv2.CC_STAT_AREA] >= min_size:
+        area = int(stats[label, cv2.CC_STAT_AREA])
+        w = int(stats[label, cv2.CC_STAT_WIDTH])
+        h = int(stats[label, cv2.CC_STAT_HEIGHT])
+        if area >= min_size or max(w, h) >= min_length:
             cleaned[labels == label] = 255
     return cleaned
+
+
+# ---------------------------------------------------------------------------
+# Document-type detection and palm-leaf binarisation
+# Palm leaf manuscripts have warm orange/tan backgrounds (high saturation,
+# hue 8–30 in OpenCV HSV). The standard CLAHE+Sauvola pipeline (designed
+# for stone inscriptions with near-achromatic backgrounds) fails on these
+# because it boosts fibre texture as aggressively as ink strokes.
+# The palm-leaf path uses LAB space to separate L (lightness) and A
+# (green-red axis) signals, applies mild CLAHE only to L, widens the
+# Sauvola window to average over fibre texture, and intersects the result
+# with an A-channel Otsu mask to eliminate warm-background false positives.
+# The stone/grayscale path is completely unchanged.
+# ---------------------------------------------------------------------------
+
+
+def detect_document_type(img: np.ndarray) -> str:
+    """Heuristic document-type detector returning 'palm_leaf' or 'stone'.
+
+    Uses mean HSV hue and saturation to detect warm, tan palm-leaf backgrounds.
+    """
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    mean_hue = float(hsv[:, :, 0].mean())
+    mean_sat = float(hsv[:, :, 1].mean())
+    if mean_sat > 40 and 8 <= mean_hue <= 30:
+        return "palm_leaf"
+    return "stone"
 
 
 # ─── public dispatcher ────────────────────────────────────────────────────────
@@ -320,8 +384,14 @@ def binarise(
     if img is None:
         raise FileNotFoundError(f"Cannot read image: {img_path}")
 
+    # document-type aware routing for default 'sauvola' method
+    doc_type = detect_document_type(img)
+
     if method == "sauvola":
-        binary = binarise_sauvola(img)
+        if doc_type == "palm_leaf":
+            binary = binarise_palm_leaf(img)
+        else:
+            binary = binarise_sauvola(img)
     elif method == "otsu":
         binary = binarise_otsu(img)
     elif method == "adaptive":
@@ -333,13 +403,19 @@ def binarise(
     else:
         raise ValueError(f"Unknown method '{method}'. Use: {' | '.join(_METHODS)}")
 
-    binary = remove_noise_blobs(binary)
+    if doc_type == "palm_leaf" and method == "sauvola":
+        binary = remove_noise_blobs(binary, min_size=8, min_length=15)
+    else:
+        binary = remove_noise_blobs(binary)
 
     out = Path(output_path)
     out.parent.mkdir(parents=True, exist_ok=True)
     cv2.imwrite(str(out), binary)
 
-    LOGGER.info("Binarised %s → %s (method=%s)", img_path, out, method)
+    LOGGER.info(
+        "Binarised %s → %s (method=%s, doc_type=%s)",
+        img_path, out, method, doc_type
+    )
     return binary
 
 

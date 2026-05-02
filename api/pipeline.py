@@ -137,18 +137,26 @@ def _run_enhance(image_id: str, mode: str = "superres") -> dict:
 
 
 def _run_binarise(image_id: str, method: str = "sauvola") -> dict:
-    from src.binarise import binarise
+    from src.binarise import binarise, detect_document_type
+    import cv2
 
-    # Prefer enhanced → preprocessed → raw (enhanced filename includes mode suffix)
     stem = _safe_output_stem(image_id)
-    enhanced_candidates = sorted(ENHANCED_DIR.glob(f"{stem}_enhanced_*.jpg"))
-    preprocessed = PREPROCESSED_DIR / f"{stem}_preprocessed.jpg"
-    if enhanced_candidates:
-        src_path = enhanced_candidates[-1]  # most recently written mode
-    elif preprocessed.exists():
-        src_path = preprocessed
+
+    raw_path = _find_raw_path(image_id)
+    raw_img = cv2.imread(str(raw_path)) if raw_path else None
+    doc_type = detect_document_type(raw_img) if raw_img is not None else "stone"
+
+    if doc_type == "palm_leaf":
+        src_path = raw_path
     else:
-        src_path = _find_raw_path(image_id)
+        enhanced_candidates = sorted(ENHANCED_DIR.glob(f"{stem}_enhanced_*.jpg"))
+        preprocessed = PREPROCESSED_DIR / f"{stem}_preprocessed.jpg"
+        if enhanced_candidates:
+            src_path = enhanced_candidates[-1]
+        elif preprocessed.exists():
+            src_path = preprocessed
+        else:
+            src_path = raw_path
 
     if src_path is None:
         return {"status": "failed", "error": f"No image found for id '{image_id}'"}
@@ -162,6 +170,7 @@ def _run_binarise(image_id: str, method: str = "sauvola") -> dict:
             "status": "done",
             "url": f"/data/binarised/{output_path.name}",
             "method": method,
+            "doc_type": doc_type,
         }
     except Exception as exc:
         return {"status": "failed", "error": str(exc)}
