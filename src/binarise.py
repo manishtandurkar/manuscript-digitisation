@@ -255,6 +255,48 @@ def binarise_adaptive(img: np.ndarray) -> np.ndarray:
     return cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
 
 
+def binarise_stone(img: np.ndarray) -> np.ndarray:
+    """Specialised stone inscription binarisation.
+
+    Stone grain (1–5 px) and carved text strokes (8–30 px) differ in scale.
+    Pipeline:
+      1. Gaussian pre-smooth (sigma=3) — kills sub-5px grain without affecting strokes.
+      2. Black-hat morphological transform — detects dark recesses (carvings) relative
+         to a structuring element sized to expected stroke width; suppresses
+         large-scale background variation at the same time.
+      3. Normalize + Otsu — bimodal distribution (stone≈0, carvings>0) after black-hat.
+      4. Morphological clean-up — open removes residual grain speckles, close fills gaps.
+    Output: white text on black background.
+    """
+    gray = _to_gray(img)
+    h, w = gray.shape
+
+    # 1. Stronger pre-smooth: sigma=5 kills <10px grain, carved grooves (15-50px) survive
+    smooth = cv2.GaussianBlur(gray, (0, 0), sigmaX=5, sigmaY=5)
+
+    # 2. Black-hat with kernel sized to span full stroke width (~1/12 of short edge).
+    #    Grooves narrower than k appear bright; wider grooves + flat background = 0.
+    k = max(31, min(h, w) // 12)
+    if k % 2 == 0:
+        k += 1
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
+    black_hat = cv2.morphologyEx(smooth, cv2.MORPH_BLACKHAT, kernel)
+
+    # 3. Normalize then keep only top-30% response (carved grooves dominate the peak;
+    #    grain texture sits in the lower tail — percentile threshold is more selective
+    #    than Otsu when the distribution is not cleanly bimodal).
+    black_hat = cv2.normalize(black_hat, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+    thresh_val = int(np.percentile(black_hat, 75))
+    thresh_val = max(thresh_val, 30)  # floor: never threshold below 30
+    _, binary = cv2.threshold(black_hat, thresh_val, 255, cv2.THRESH_BINARY)
+
+    # 4. Open (3×3) removes surviving grain speckles; close (5×5) fills stroke gaps
+    binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+    binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))
+
+    return binary
+
+
 def binarise_palm_leaf(img: np.ndarray) -> np.ndarray:
     """Specialised palm-leaf manuscript binarisation path.
 
@@ -391,7 +433,7 @@ def binarise(
         if doc_type == "palm_leaf":
             binary = binarise_palm_leaf(img)
         else:
-            binary = binarise_sauvola(img)
+            binary = binarise_stone(img)
     elif method == "otsu":
         binary = binarise_otsu(img)
     elif method == "adaptive":
@@ -405,6 +447,8 @@ def binarise(
 
     if doc_type == "palm_leaf" and method == "sauvola":
         binary = remove_noise_blobs(binary, min_size=8, min_length=15)
+    elif doc_type == "stone":
+        binary = remove_noise_blobs(binary, min_size=200, min_length=30)
     else:
         binary = remove_noise_blobs(binary)
 

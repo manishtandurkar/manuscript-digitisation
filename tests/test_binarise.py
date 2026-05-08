@@ -55,6 +55,33 @@ def test_otsu_output_is_binary():
     assert _is_binary(out)
 
 
+# --- binarise_stone ---
+
+def test_stone_shape_and_dtype():
+    from src.binarise import binarise_stone
+    out = binarise_stone(_bgr())
+    assert out.shape == (64, 64)
+    assert out.dtype == np.uint8
+
+
+def test_stone_output_is_binary():
+    from src.binarise import binarise_stone
+    out = binarise_stone(_bgr())
+    assert _is_binary(out)
+
+
+def test_stone_low_contrast_input():
+    """Stone images have low contrast — verify binary output still produced."""
+    from src.binarise import binarise_stone
+    # Near-uniform gray with subtle variation (simulates stone texture)
+    rng = np.random.default_rng(7)
+    gray_vals = rng.integers(100, 140, (128, 128), dtype=np.uint8)
+    img = cv2.cvtColor(gray_vals, cv2.COLOR_GRAY2BGR)
+    out = binarise_stone(img)
+    assert _is_binary(out)
+    assert out.shape == (128, 128)
+
+
 # --- binarise_adaptive ---
 
 def test_adaptive_shape_and_dtype():
