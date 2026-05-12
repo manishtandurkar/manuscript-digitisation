@@ -76,6 +76,9 @@ def _find_raw_path(image_id: str) -> Path | None:
     return _raw_path_index().get(image_id.lower())
 
 
+TRANSCRIPTIONS_DIR = _PROJECT_ROOT / "data" / "transcriptions"
+
+
 def run_stage(image_id: str, stage: str, options: dict | None = None) -> dict:
     opts = options or {}
     if stage == "preprocess":
@@ -84,6 +87,8 @@ def run_stage(image_id: str, stage: str, options: dict | None = None) -> dict:
         return _run_enhance(image_id, mode=opts.get("mode", "superres"))
     if stage == "binarise":
         return _run_binarise(image_id, method=opts.get("method", "sauvola"))
+    if stage == "ocr":
+        return _run_ocr(image_id, script=opts.get("script", "auto"))
     return {"status": "skipped", "reason": f"Stage '{stage}' not yet implemented"}
 
 
@@ -171,6 +176,47 @@ def _run_binarise(image_id: str, method: str = "sauvola") -> dict:
             "url": f"/data/binarised/{output_path.name}",
             "method": method,
             "doc_type": doc_type,
+        }
+    except Exception as exc:
+        return {"status": "failed", "error": str(exc)}
+
+
+def _run_ocr(image_id: str, script: str = "auto") -> dict:
+    from src.ocr import transcribe
+
+    stem = _safe_output_stem(image_id)
+
+    # Prefer binarised → enhanced → preprocessed → raw as input
+    binarised = BINARISED_DIR / f"{stem}_binarised.png"
+    enhanced_candidates = sorted(ENHANCED_DIR.glob(f"{stem}_enhanced_*.jpg"))
+    preprocessed = PREPROCESSED_DIR / f"{stem}_preprocessed.jpg"
+    raw_path = _find_raw_path(image_id)
+
+    if binarised.exists():
+        src_path: Path | None = binarised
+    elif enhanced_candidates:
+        src_path = enhanced_candidates[-1]
+    elif preprocessed.exists():
+        src_path = preprocessed
+    else:
+        src_path = raw_path
+
+    if src_path is None:
+        return {"status": "failed", "error": f"No image found for id '{image_id}'"}
+
+    TRANSCRIPTIONS_DIR.mkdir(parents=True, exist_ok=True)
+    output_path = TRANSCRIPTIONS_DIR / f"{stem}_transcription.json"
+
+    try:
+        result = transcribe(str(src_path), script=script, output_path=str(output_path))
+        return {
+            "status": "done",
+            "url": f"/data/transcriptions/{output_path.name}",
+            "script": result.get("script"),
+            "overall_confidence": result.get("overall_confidence"),
+            "confidence_status": result.get("confidence_status"),
+            "text_preview": result.get("text", "")[:200],
+            "engine_used": result.get("engine_used"),
         }
     except Exception as exc:
         return {"status": "failed", "error": str(exc)}
