@@ -44,7 +44,7 @@ if _TORCH_AVAILABLE:
     class _LightUNet(nn.Module):
         """
         Lightweight U-Net for document binarisation.
-        Train on THPLMD grayscale→binary pairs (input: 1×H×W float, output: 1×H×W sigmoid).
+        Train on THPLMD grayscale->binary pairs (input: 1xHxW float, output: 1xHxW sigmoid).
         Expected weights file: models/weights/unet_binarise.pth
         """
         _CH = [1, 32, 64, 128, 256]
@@ -85,7 +85,7 @@ if _TORCH_AVAILABLE:
             self, x: "torch.Tensor"
         ) -> "tuple[torch.Tensor, int, int]":
             ps = self.patch_size
-            x = x.unfold(2, ps, ps).unfold(3, ps, ps)  # B×1×hp×wp×ps×ps
+            x = x.unfold(2, ps, ps).unfold(3, ps, ps)
             hp, wp = x.shape[2], x.shape[3]
             B = x.shape[0]
             x = x.contiguous().view(B, hp * wp, ps * ps)
@@ -95,7 +95,7 @@ if _TORCH_AVAILABLE:
         """
         Simplified DocEnTr: patch-ViT encoder + CNN decoder for binarisation.
         Ref: El-Hajj & Barakat, ArXiv 2209.09921.
-        Train on THPLMD grayscale→binary pairs (input: 1×H×W float, output: 1×H×W sigmoid).
+        Train on THPLMD grayscale->binary pairs (input: 1xHxW float, output: 1xHxW sigmoid).
         H and W must be multiples of patch_size (padding handled in _dl_infer).
         Expected weights file: models/weights/docentr_binarise.pth
         """
@@ -183,7 +183,7 @@ def _load_dl_model(name: str, weights_path: Path) -> "nn.Module | None":
 def _dl_infer(
     img: np.ndarray, model_name: str, weights_path: Path
 ) -> tuple[np.ndarray | None, float]:
-    """Returns (prob_map H×W float32, confidence). prob_map None if model unavailable."""
+    """Returns (prob_map HxW float32, confidence). prob_map None if model unavailable."""
     model = _load_dl_model(model_name, weights_path)
     if model is None:
         return None, 0.0
@@ -219,107 +219,213 @@ def _clahe(gray: np.ndarray) -> np.ndarray:
     return cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(gray)
 
 
-def _sauvola_window(gray: np.ndarray) -> int:
-    """Window ~1/20 of shorter dimension, clamped to [15, 51], always odd."""
-    w = max(15, min(gray.shape[0], gray.shape[1]) // 20)
-    return w if w % 2 == 1 else w + 1
+# ─── NEW: Adaptive parameter selection ────────────────────────────────────────
+
+def _image_stats(gray: np.ndarray) -> dict:
+    """Compute brightness/contrast stats used for adaptive param selection."""
+    mean = float(gray.mean())
+    std  = float(gray.std())
+    h, w = gray.shape
+    return {"mean": mean, "std": std, "h": h, "w": w, "shorter": min(h, w)}
 
 
-def binarise_sauvola(img: np.ndarray, window_size: int | None = None) -> np.ndarray:
-    """Sauvola local thresholding — best for uneven backgrounds (stone, palm leaf)."""
+def _adaptive_sauvola_params(gray: np.ndarray) -> tuple[int, float]:
+    """
+    Dynamically tune Sauvola (window_size, k) from image statistics.
+
+    Rules (empirically derived from inscription image diagnostics):
+      - High-res images (shorter side > 1000px): larger window captures more context
+      - Low-contrast images (std < 30): increase k to be more aggressive
+      - Very dark images (mean < 60): decrease k slightly to avoid over-thresholding
+      - Palm-leaf fibre noise: small window (31–41) with moderate k (0.15–0.20)
+
+    Returns (window_size, k) — window_size is always odd.
+    """
+    s = _image_stats(gray)
+    shorter = s["shorter"]
+    mean    = s["mean"]
+    std     = s["std"]
+
+    # Base window: ~1/20 of shorter dimension, clamped [15, 71]
+    ws = max(15, min(71, shorter // 20))
+    if ws % 2 == 0:
+        ws += 1
+
+    # Scale window up for high-res images
+    if shorter > 1500:
+        ws = min(81, ws + 10)
+    elif shorter > 800:
+        ws = min(61, ws + 6)
+
+    # Base k
+    k = 0.20
+
+    # Low contrast → be more aggressive (raise k)
+    if std < 25:
+        k = 0.30
+    elif std < 40:
+        k = 0.25
+
+    # Very dark image (rubbing/estampage style) → moderate k
+    if mean < 60:
+        k = max(k, 0.18)
+
+    # High brightness (pale stone, outdoor) → lower k to catch faint strokes
+    if mean > 160:
+        k = min(k, 0.15)
+
+    return ws, k
+
+
+def binarise_sauvola(
+    img: np.ndarray,
+    window_size: int | None = None,
+    k: float | None = None,
+) -> np.ndarray:
+    """Sauvola local thresholding with adaptive parameter selection.
+    Output: white text, black background.
+    """
     from skimage.filters import threshold_sauvola
 
     gray = _clahe(_to_gray(img))
-    ws = window_size if window_size is not None else _sauvola_window(gray)
-    thresh = threshold_sauvola(gray, window_size=ws)
-    binary = (gray > thresh).astype(np.uint8) * 255
-    kernel = np.ones((3, 3), np.uint8)
-    return cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
+    ws, k_auto = _adaptive_sauvola_params(gray)
+
+    ws_final = window_size if window_size is not None else ws
+    k_final  = k           if k          is not None else k_auto
+
+    thresh  = threshold_sauvola(gray, window_size=ws_final, k=k_final)
+    binary  = (gray < thresh).astype(np.uint8) * 255
+
+    # Morphological cleanup: close small gaps in strokes
+    stroke_kernel = np.ones((3, 3), np.uint8)
+    binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, stroke_kernel)
+    return binary
 
 
 def binarise_otsu(img: np.ndarray) -> np.ndarray:
-    """Otsu global thresholding — fast, good for clean paper manuscripts."""
+    """Otsu global thresholding. Output: white text, black background."""
     gray = _clahe(_to_gray(img))
-    _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
     kernel = np.ones((3, 3), np.uint8)
     return cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
 
 
 def binarise_adaptive(img: np.ndarray) -> np.ndarray:
-    """OpenCV adaptive mean thresholding — fallback for mixed quality images."""
+    """OpenCV adaptive mean thresholding. Output: white text, black background."""
     gray = _clahe(_to_gray(img))
     binary = cv2.adaptiveThreshold(
-        gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY, 15, 8
+        gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY_INV, 15, 8
     )
     kernel = np.ones((3, 3), np.uint8)
     return cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
 
 
 def binarise_stone(img: np.ndarray) -> np.ndarray:
-    """Specialised stone inscription binarisation.
+    """
+    Stone inscription binarisation — adaptive dual-path.
 
-    Stone grain (1–5 px) and carved text strokes (8–30 px) differ in scale.
-    Pipeline:
-      1. Gaussian pre-smooth (sigma=3) — kills sub-5px grain without affecting strokes.
-      2. Black-hat morphological transform — detects dark recesses (carvings) relative
-         to a structuring element sized to expected stroke width; suppresses
-         large-scale background variation at the same time.
-      3. Normalize + Otsu — bimodal distribution (stone≈0, carvings>0) after black-hat.
-      4. Morphological clean-up — open removes residual grain speckles, close fills gaps.
-    Output: white text on black background.
+    Path A (black-hat): deep carvings with strong shadow contrast.
+    Path B (CLAHE + adaptive Sauvola): shallow/faint/weathered carvings.
+    Selection: whichever path produces more large connected components.
+
+    Morphological kernels are scaled to image resolution so strokes
+    are closed without merging adjacent characters.
     """
     gray = _to_gray(img)
     h, w = gray.shape
+    shorter = min(h, w)
 
-    # 1. Stronger pre-smooth: sigma=5 kills <10px grain, carved grooves (15-50px) survive
-    smooth = cv2.GaussianBlur(gray, (0, 0), sigmaX=5, sigmaY=5)
+    # Morphological kernel sizes scaled to resolution
+    close_k = max(3, shorter // 300)   # 3–7 px typically
+    open_k  = max(2, shorter // 500)   # 2–4 px typically
 
-    # 2. Black-hat with kernel sized to span full stroke width (~1/12 of short edge).
-    #    Grooves narrower than k appear bright; wider grooves + flat background = 0.
-    k = max(31, min(h, w) // 12)
-    if k % 2 == 0:
-        k += 1
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
-    black_hat = cv2.morphologyEx(smooth, cv2.MORPH_BLACKHAT, kernel)
-
-    # 3. Normalize then keep only top-30% response (carved grooves dominate the peak;
-    #    grain texture sits in the lower tail — percentile threshold is more selective
-    #    than Otsu when the distribution is not cleanly bimodal).
+    # --- Path A: black-hat (deep carvings) ---
+    smooth_a = cv2.GaussianBlur(gray, (0, 0), sigmaX=2, sigmaY=2)
+    bh_k = max(21, shorter // 12)
+    if bh_k % 2 == 0:
+        bh_k += 1
+    kernel_bh = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (bh_k, bh_k))
+    black_hat = cv2.morphologyEx(smooth_a, cv2.MORPH_BLACKHAT, kernel_bh)
     black_hat = cv2.normalize(black_hat, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
-    thresh_val = int(np.percentile(black_hat, 75))
-    thresh_val = max(thresh_val, 30)  # floor: never threshold below 30
-    _, binary = cv2.threshold(black_hat, thresh_val, 255, cv2.THRESH_BINARY)
 
-    # 4. Open (3×3) removes surviving grain speckles; close (5×5) fills stroke gaps
-    binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
-    binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))
+    # Adaptive threshold percentile based on std
+    stats = _image_stats(gray)
+    pct = 65 if stats["std"] > 35 else 75
+    thresh_val = max(int(np.percentile(black_hat, pct)), 15)
+    _, binary_a = cv2.threshold(black_hat, thresh_val, 255, cv2.THRESH_BINARY)
+    binary_a = cv2.morphologyEx(binary_a, cv2.MORPH_OPEN,  np.ones((open_k, open_k), np.uint8))
+    binary_a = cv2.morphologyEx(binary_a, cv2.MORPH_CLOSE, np.ones((close_k, close_k), np.uint8))
 
-    return binary
+    # --- Path B: CLAHE + adaptive Sauvola (shallow/weathered) ---
+    from skimage.filters import threshold_sauvola
+    smooth_b = cv2.GaussianBlur(gray, (0, 0), sigmaX=1.5, sigmaY=1.5)
+    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+    eq = clahe.apply(smooth_b)
+    ws, k = _adaptive_sauvola_params(eq)
+    thresh_s = threshold_sauvola(eq, window_size=ws, k=k)
+    binary_b = (eq < thresh_s).astype(np.uint8) * 255
+    binary_b = cv2.morphologyEx(binary_b, cv2.MORPH_OPEN,  np.ones((open_k, open_k), np.uint8))
+    binary_b = cv2.morphologyEx(binary_b, cv2.MORPH_CLOSE, np.ones((close_k, close_k), np.uint8))
+
+    # --- Path C: Otsu fallback for high-contrast rubbings ---
+    # Rubbings (image1.jpeg style) are already near-binary; Otsu handles them cleanly
+    _, binary_c = cv2.threshold(
+        cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(gray),
+        0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU
+    )
+    binary_c = cv2.morphologyEx(binary_c, cv2.MORPH_CLOSE, np.ones((close_k, close_k), np.uint8))
+
+    def _count_large(bin_img: np.ndarray) -> int:
+        min_area = max(50, (shorter // 100) ** 2)
+        n, _, stats_cc, _ = cv2.connectedComponentsWithStats(bin_img, connectivity=8)
+        return sum(1 for i in range(1, n) if stats_cc[i, cv2.CC_STAT_AREA] >= min_area)
+
+    scores = [_count_large(b) for b in (binary_a, binary_b, binary_c)]
+    best   = [binary_a, binary_b, binary_c][scores.index(max(scores))]
+    LOGGER.debug("stone paths scores A=%d B=%d C=%d", *scores)
+    return best
 
 
 def binarise_palm_leaf(img: np.ndarray) -> np.ndarray:
-    """Specialised palm-leaf manuscript binarisation path.
+    """
+    Palm-leaf manuscript binarisation.
 
-    Uses LAB-space L-channel Sauvola with a widened window and an
-    A-channel Otsu mask to suppress warm-background fibre texture.
+    Uses adaptive Gaussian thresholding on raw gray (no CLAHE — destroys fibre contrast).
+    Block size and C are derived from image resolution and contrast stats.
+    Output: white text, black background.
     """
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    h, w = gray.shape
+    shorter = min(h, w)
+
+    # Adaptive block size: ~1/15 of shorter side, must be odd, clamped [21, 51]
+    block = max(21, min(51, (shorter // 15) | 1))
+    if block % 2 == 0:
+        block += 1
+
+    # C offset: higher for low-contrast leaves (faded ink)
+    stats = _image_stats(gray)
+    C = 8 if stats["std"] > 30 else 12
 
     binary = cv2.adaptiveThreshold(
         gray, 255,
         cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-        cv2.THRESH_BINARY,
-        31, 5
+        cv2.THRESH_BINARY_INV,
+        block, C
     )
-    binary = cv2.bitwise_not(binary)
 
-    h, w = binary.shape
+    # Flood-fill corners to remove edge border noise
     mask = np.zeros((h + 2, w + 2), np.uint8)
-    for corner in [(0, 0), (0, w-1), (h-1, 0), (h-1, w-1)]:
+    for corner in [(0, 0), (0, w - 1), (h - 1, 0), (h - 1, w - 1)]:
         cv2.floodFill(binary, mask, (corner[1], corner[0]), 0)
 
-    kernel = np.ones((2, 2), dtype=np.uint8)
-    binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
+    # Fine close (2×2) preserves thin ink strokes on fibre background
+    binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, np.ones((2, 2), np.uint8))
+
+    # Open slightly to disconnect fibre noise from strokes
+    open_k = max(1, shorter // 800)
+    if open_k > 1:
+        binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, np.ones((open_k, open_k), np.uint8))
 
     return binary
 
@@ -333,7 +439,6 @@ def binarise_unet(
     """
     Lightweight U-Net binarisation.
     Falls back to Sauvola when confidence < _CONFIDENCE_THRESHOLD or weights absent.
-    Train: THPLMD grayscale input → binary ground-truth pairs.
     """
     wp = Path(weights_path) if weights_path else _MODELS_DIR / "unet_binarise.pth"
     prob, conf = _dl_infer(img, "unet", wp)
@@ -350,7 +455,6 @@ def binarise_docentr(
     """
     DocEnTr (patch-ViT) binarisation.
     Falls back to Sauvola when confidence < _CONFIDENCE_THRESHOLD or weights absent.
-    Train: THPLMD grayscale input → binary ground-truth pairs.
     """
     wp = Path(weights_path) if weights_path else _MODELS_DIR / "docentr_binarise.pth"
     prob, conf = _dl_infer(img, "docentr", wp)
@@ -363,46 +467,41 @@ def binarise_docentr(
 # ─── noise removal ────────────────────────────────────────────────────────────
 
 def remove_noise_blobs(
-    binary: np.ndarray, min_size: int = 50, min_length: int = 30
+    binary: np.ndarray,
+    min_size: int | None = None,
+    min_length: int | None = None,
 ) -> np.ndarray:
-    """Remove small disconnected components (dust, noise) from binary image.
+    """Remove small disconnected components. Parameters auto-scaled if not given."""
+    h, w = binary.shape
+    shorter = min(h, w)
 
-    Preserves components that are long/large even if their area is small
-    (useful for thin strokes on palm leaves). Keeps a component if
-    area >= min_size OR max(width, height) >= min_length.
-    """
+    # Auto-scale: noise blob threshold ~= (shorter/200)^2, min 20
+    if min_size is None:
+        min_size = max(20, (shorter // 200) ** 2)
+    if min_length is None:
+        min_length = max(10, shorter // 150)
+
     num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(
         binary, connectivity=8
     )
     cleaned = np.zeros_like(binary)
     for label in range(1, num_labels):
         area = int(stats[label, cv2.CC_STAT_AREA])
-        w = int(stats[label, cv2.CC_STAT_WIDTH])
-        h = int(stats[label, cv2.CC_STAT_HEIGHT])
-        if area >= min_size or max(w, h) >= min_length:
+        cw   = int(stats[label, cv2.CC_STAT_WIDTH])
+        ch   = int(stats[label, cv2.CC_STAT_HEIGHT])
+        if area >= min_size or max(cw, ch) >= min_length:
             cleaned[labels == label] = 255
     return cleaned
 
 
 # ---------------------------------------------------------------------------
-# Document-type detection and palm-leaf binarisation
-# Palm leaf manuscripts have warm orange/tan backgrounds (high saturation,
-# hue 8–30 in OpenCV HSV). The standard CLAHE+Sauvola pipeline (designed
-# for stone inscriptions with near-achromatic backgrounds) fails on these
-# because it boosts fibre texture as aggressively as ink strokes.
-# The palm-leaf path uses LAB space to separate L (lightness) and A
-# (green-red axis) signals, applies mild CLAHE only to L, widens the
-# Sauvola window to average over fibre texture, and intersects the result
-# with an A-channel Otsu mask to eliminate warm-background false positives.
-# The stone/grayscale path is completely unchanged.
+# Document-type detection
+# Palm leaf manuscripts: warm orange/tan background, high saturation, hue 8-30.
+# Stone inscriptions: near-achromatic, low saturation.
 # ---------------------------------------------------------------------------
 
-
 def detect_document_type(img: np.ndarray) -> str:
-    """Heuristic document-type detector returning 'palm_leaf' or 'stone'.
-
-    Uses mean HSV hue and saturation to detect warm, tan palm-leaf backgrounds.
-    """
+    """Returns 'palm_leaf' or 'stone' based on HSV hue and saturation."""
     hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
     mean_hue = float(hsv[:, :, 0].mean())
     mean_sat = float(hsv[:, :, 1].mean())
@@ -421,12 +520,14 @@ def binarise(
     output_path: str,
     method: str = "sauvola",
 ) -> np.ndarray:
-    """Binarise image. method: 'sauvola' | 'otsu' | 'adaptive' | 'unet' | 'docentr'"""
-    img = cv2.imread(str(img_path))
+    """Binarise image. Output is always white text on black background.
+    method: 'sauvola' | 'otsu' | 'adaptive' | 'unet' | 'docentr'
+    """
+    # Use imdecode to handle paths with special characters on Windows
+    img = cv2.imdecode(np.fromfile(str(img_path), dtype=np.uint8), cv2.IMREAD_COLOR)
     if img is None:
         raise FileNotFoundError(f"Cannot read image: {img_path}")
 
-    # document-type aware routing for default 'sauvola' method
     doc_type = detect_document_type(img)
 
     if method == "sauvola":
@@ -445,19 +546,23 @@ def binarise(
     else:
         raise ValueError(f"Unknown method '{method}'. Use: {' | '.join(_METHODS)}")
 
+    # Safety: enforce white text on black background
+    # If mean >= 127 the image is mostly white (wrong polarity) — flip it
+    if binary.mean() >= 127:
+        binary = cv2.bitwise_not(binary)
+
+    # Noise removal with document-type appropriate parameters
     if doc_type == "palm_leaf" and method == "sauvola":
         binary = remove_noise_blobs(binary, min_size=8, min_length=15)
-    elif doc_type == "stone":
-        binary = remove_noise_blobs(binary, min_size=200, min_length=30)
     else:
-        binary = remove_noise_blobs(binary)
+        binary = remove_noise_blobs(binary, min_size=80, min_length=25)
 
     out = Path(output_path)
     out.parent.mkdir(parents=True, exist_ok=True)
     cv2.imwrite(str(out), binary)
 
     LOGGER.info(
-        "Binarised %s → %s (method=%s, doc_type=%s)",
+        "Binarised %s -> %s (method=%s, doc_type=%s)",
         img_path, out, method, doc_type
     )
     return binary

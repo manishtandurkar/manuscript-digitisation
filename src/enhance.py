@@ -60,6 +60,13 @@ def _download_weights(model_path: Path) -> None:
 
 
 def _build_upsampler(model_path: str):
+    import sys
+    try:
+        import torchvision.transforms.functional as F
+        sys.modules['torchvision.transforms.functional_tensor'] = F
+    except ImportError:
+        pass
+
     from basicsr.archs.rrdbnet_arch import RRDBNet
     from realesrgan import RealESRGANer
 
@@ -108,30 +115,64 @@ def enhance(
     img_path: str,
     output_path: str,
     use_dstretch: bool = False,
-    mode: str = "superres",
+    mode: str = "auto",          # NEW: "auto" | "dstretch" | "superres" | "mild"
 ) -> np.ndarray:
-    """Full enhancement chain. mode='dstretch' is fast; mode='superres' uses Real-ESRGAN (slow on CPU)."""
+    """
+    Full enhancement chain with document-type-aware routing.
+
+    mode='auto'     — Detect document type and choose best mode automatically.
+    mode='dstretch' — Decorrelation stretch (faded pigment cave paintings only).
+    mode='superres' — Real-ESRGAN x4 (low-res scans, needs GPU for speed).
+    mode='mild'     — Denoise + sharpen only (rubbings, high-contrast originals).
+    """
     from src.utils import save_image
+    from src.binarise import detect_document_type
 
     img = cv2.imread(str(img_path))
     if img is None:
         raise FileNotFoundError(f"Cannot read image: {img_path}")
 
-    img = denoise(img)
+    doc_type = detect_document_type(img)
+    h, w = img.shape[:2]
+    is_already_high_contrast = (
+        doc_type == "stone"
+        and cv2.cvtColor(img, cv2.COLOR_BGR2GRAY).std() < 30
+        and cv2.cvtColor(img, cv2.COLOR_BGR2HSV)[:, :, 1].mean() < 20
+    )
 
-    if use_dstretch or mode == "dstretch":
+    # Auto-mode routing:
+    # - Rubbings/estampages (high contrast, near-achromatic): mild only
+    # - Palm leaf: dstretch helps reveal faded ink channels
+    # - Low-res stone (<500px): super-res
+    # - Normal stone: mild
+    if mode == "auto":
+        if use_dstretch or doc_type == "palm_leaf":
+            mode = "dstretch"
+        elif is_already_high_contrast:
+            mode = "mild"
+        elif min(h, w) < 500:
+            mode = "superres"
+        else:
+            mode = "mild"
+
+    img = denoise(img, strength=8 if doc_type == "palm_leaf" else 10)
+
+    if mode == "dstretch":
         img = dstretch(img)
-    else:
+    elif mode == "superres":
         try:
             img = enhance_with_realesrgan(img)
-        except Exception as exc:  # ImportError when basicsr not installed; RuntimeError for GPU/model errors
-            LOGGER.warning("Real-ESRGAN unavailable (%s) — skipping super-resolution.", exc)
+        except Exception as exc:
+            LOGGER.warning("Real-ESRGAN unavailable (%s) — using mild mode.", exc)
+    # "mild" and fallback: just denoise + sharpen (already denoised above)
 
-    img = sharpen(img)
+    # Sharpen amount: less aggressive for palm leaf (thin strokes break)
+    sharpen_amount = 1.0 if doc_type == "palm_leaf" else 1.5
+    img = sharpen(img, amount=sharpen_amount)
 
     out = Path(output_path)
     out.parent.mkdir(parents=True, exist_ok=True)
     save_image(out, img)
 
-    LOGGER.info("Enhanced %s → %s", img_path, out)
+    LOGGER.info("Enhanced %s → %s (mode=%s, doc_type=%s)", img_path, out, mode, doc_type)
     return img
