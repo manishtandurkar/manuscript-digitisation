@@ -13,10 +13,16 @@ export interface StageResult {
   status: StageStatus;
   url?: string;
   text?: string;
+  text_preview?: string;
+  script?: string;
+  overall_confidence?: number;
+  confidence_status?: string;
+  engine_used?: string;
   error?: string;
   reason?: string;
   method?: string;
   mode?: string;
+  doc_type?: string;
 }
 
 export type StageName = "preprocess" | "enhance" | "binarise" | "ocr" | "translate";

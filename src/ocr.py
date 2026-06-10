@@ -34,13 +34,21 @@ SCRIPT_CONFIG: dict[str, dict[str, Any]] = {
 _CONFIDENCE_VERIFIED = 0.85
 _CONFIDENCE_REVIEW   = 0.60
 
+# ─── Optional import guards ──────────────────────────────────────────────────
+
+_TESSDATA_DIR = Path(__file__).resolve().parents[1] / "tessdata"
+_TESS_BINARY  = Path(r"C:\Program Files\Tesseract-OCR\tesseract.exe")
+
 # Tesseract PSM/OEM per spec: LSTM engine, uniform block of text
 _TESS_CONFIG = "--oem 1 --psm 6"
 
-# ─── Optional import guards ──────────────────────────────────────────────────
-
 try:
     import pytesseract
+    import os as _os
+    if _TESS_BINARY.exists():
+        pytesseract.pytesseract.tesseract_cmd = str(_TESS_BINARY)
+    if _TESSDATA_DIR.exists():
+        _os.environ["TESSDATA_PREFIX"] = str(_TESSDATA_DIR)
     _TESS_AVAILABLE = True
 except ImportError:
     _TESS_AVAILABLE = False

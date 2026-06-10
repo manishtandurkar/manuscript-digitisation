@@ -121,9 +121,54 @@ function StageResult({
           </div>
         )}
 
-        {result.status === "done" && result.url && (
+        {result.status === "done" && stage === "ocr" && (
           <div className="space-y-3">
-            {/* Comparison slider — full width, taller */}
+            <div className="bg-gray-950 rounded-lg p-3 space-y-2">
+              <div className="flex flex-wrap gap-2 text-xs">
+                {result.script && (
+                  <span className="px-2 py-0.5 rounded-full border bg-gray-800 text-gray-400 border-gray-700">
+                    Script: {result.script}
+                  </span>
+                )}
+                {result.engine_used && (
+                  <span className="px-2 py-0.5 rounded-full border bg-gray-800 text-gray-400 border-gray-700">
+                    Engine: {result.engine_used}
+                  </span>
+                )}
+                {result.confidence_status && (
+                  <span className={`px-2 py-0.5 rounded-full border font-medium ${
+                    result.confidence_status === "high"
+                      ? "bg-emerald-900/60 text-emerald-400 border-emerald-700"
+                      : result.confidence_status === "medium"
+                      ? "bg-amber-900/60 text-amber-400 border-amber-700"
+                      : "bg-red-900/60 text-red-400 border-red-700"
+                  }`}>
+                    Confidence: {result.confidence_status}
+                    {result.overall_confidence !== undefined && ` (${(result.overall_confidence * 100).toFixed(0)}%)`}
+                  </span>
+                )}
+              </div>
+              <div className="h-48 overflow-auto text-xs text-gray-300 whitespace-pre-wrap font-mono">
+                {result.text_preview || result.text || (
+                  <span className="text-gray-600 italic">No text extracted</span>
+                )}
+              </div>
+            </div>
+            {result.url && (
+              <a
+                href={result.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="block text-center text-xs text-indigo-400 hover:text-indigo-300 transition-colors py-1.5 px-3 bg-indigo-950/50 hover:bg-indigo-900/50 rounded-lg border border-indigo-800"
+              >
+                Download full transcription JSON
+              </a>
+            )}
+          </div>
+        )}
+
+        {result.status === "done" && stage !== "ocr" && result.url && (
+          <div className="space-y-3">
             <ComparisonSlider
               before={originalUrl}
               after={result.url}
@@ -145,12 +190,6 @@ function StageResult({
                 View original
               </button>
             </div>
-          </div>
-        )}
-
-        {result.status === "done" && result.text && (
-          <div className="h-64 overflow-auto bg-gray-950 rounded-lg p-3 text-xs text-gray-300 whitespace-pre-wrap font-mono">
-            {result.text}
           </div>
         )}
       </div>
