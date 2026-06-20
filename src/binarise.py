@@ -322,24 +322,20 @@ def binarise_adaptive(img: np.ndarray) -> np.ndarray:
 
 def binarise_stone(img: np.ndarray) -> np.ndarray:
     """
-    Stone inscription binarisation — adaptive dual-path.
+    Stone inscription binarisation - adaptive multi-path.
 
     Path A (black-hat): deep carvings with strong shadow contrast.
     Path B (CLAHE + adaptive Sauvola): shallow/faint/weathered carvings.
+    Path C (median-blur + Otsu): rubbings/estampages with speckled grain noise.
     Selection: whichever path produces more large connected components.
-
-    Morphological kernels are scaled to image resolution so strokes
-    are closed without merging adjacent characters.
     """
     gray = _to_gray(img)
     h, w = gray.shape
     shorter = min(h, w)
 
-    # Morphological kernel sizes scaled to resolution
-    close_k = max(3, shorter // 300)   # 3–7 px typically
-    open_k  = max(2, shorter // 500)   # 2–4 px typically
+    close_k = max(3, shorter // 300)
+    open_k  = max(2, shorter // 500)
 
-    # --- Path A: black-hat (deep carvings) ---
     smooth_a = cv2.GaussianBlur(gray, (0, 0), sigmaX=2, sigmaY=2)
     bh_k = max(21, shorter // 12)
     if bh_k % 2 == 0:
@@ -347,8 +343,6 @@ def binarise_stone(img: np.ndarray) -> np.ndarray:
     kernel_bh = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (bh_k, bh_k))
     black_hat = cv2.morphologyEx(smooth_a, cv2.MORPH_BLACKHAT, kernel_bh)
     black_hat = cv2.normalize(black_hat, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
-
-    # Adaptive threshold percentile based on std
     stats = _image_stats(gray)
     pct = 65 if stats["std"] > 35 else 75
     thresh_val = max(int(np.percentile(black_hat, pct)), 15)
@@ -356,7 +350,6 @@ def binarise_stone(img: np.ndarray) -> np.ndarray:
     binary_a = cv2.morphologyEx(binary_a, cv2.MORPH_OPEN,  np.ones((open_k, open_k), np.uint8))
     binary_a = cv2.morphologyEx(binary_a, cv2.MORPH_CLOSE, np.ones((close_k, close_k), np.uint8))
 
-    # --- Path B: CLAHE + adaptive Sauvola (shallow/weathered) ---
     from skimage.filters import threshold_sauvola
     smooth_b = cv2.GaussianBlur(gray, (0, 0), sigmaX=1.5, sigmaY=1.5)
     clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
@@ -367,13 +360,10 @@ def binarise_stone(img: np.ndarray) -> np.ndarray:
     binary_b = cv2.morphologyEx(binary_b, cv2.MORPH_OPEN,  np.ones((open_k, open_k), np.uint8))
     binary_b = cv2.morphologyEx(binary_b, cv2.MORPH_CLOSE, np.ones((close_k, close_k), np.uint8))
 
-    # --- Path C: Otsu fallback for high-contrast rubbings ---
-    # Rubbings (image1.jpeg style) are already near-binary; Otsu handles them cleanly
-    _, binary_c = cv2.threshold(
-        cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(gray),
-        0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU
-    )
-    binary_c = cv2.morphologyEx(binary_c, cv2.MORPH_CLOSE, np.ones((close_k, close_k), np.uint8))
+    median_c = cv2.medianBlur(gray, 13)
+    _, binary_c = cv2.threshold(median_c, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    binary_c = cv2.morphologyEx(binary_c, cv2.MORPH_OPEN, np.ones((2, 2), np.uint8))
+    binary_c = cv2.morphologyEx(binary_c, cv2.MORPH_CLOSE, np.ones((2, 2), np.uint8))
 
     def _count_large(bin_img: np.ndarray) -> int:
         min_area = max(50, (shorter // 100) ** 2)
@@ -383,8 +373,10 @@ def binarise_stone(img: np.ndarray) -> np.ndarray:
     scores = [_count_large(b) for b in (binary_a, binary_b, binary_c)]
     best   = [binary_a, binary_b, binary_c][scores.index(max(scores))]
     LOGGER.debug("stone paths scores A=%d B=%d C=%d", *scores)
-    return best
 
+    if best.mean() >= 127:
+        best = cv2.bitwise_not(best)
+    return best
 
 def binarise_palm_leaf(img: np.ndarray) -> np.ndarray:
     """
@@ -510,11 +502,48 @@ def detect_document_type(img: np.ndarray) -> str:
     return "stone"
 
 
+def detect_rubbing(img: np.ndarray) -> bool:
+    """Detect rubbing/estampage-style stone images (chalk-on-ink, paper grain noise).
+
+    Signature: moderate-to-high saturation (ink residue), high local speckle
+    texture (paper grain), and strong global contrast (near-bimodal histogram).
+    Thresholds derived empirically from diagnostic testing.
+    """
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    mean_sat = float(hsv[:, :, 1].mean())
+
+    gray = _to_gray(img).astype(np.float32)
+    blurred = cv2.GaussianBlur(gray, (15, 15), 0)
+    local_var = cv2.GaussianBlur((gray - blurred) ** 2, (15, 15), 0)
+    mean_local_std = float(local_var.mean()) ** 0.5
+
+    global_std = float(gray.std())
+
+    return mean_sat > 35 and mean_local_std > 18 and global_std > 50
+
+
 # ─── public dispatcher ────────────────────────────────────────────────────────
 
 _METHODS = ("sauvola", "otsu", "adaptive", "unet", "docentr")
 
 
+
+
+def binarise_rubbing(img: np.ndarray) -> np.ndarray:
+    """Dedicated path for rubbings/estampages. Median-blur + Otsu only.
+
+    Parameters (blur=13, open=2, close=2) determined empirically from
+    diagnostic grid-search testing on rubbing-style stone inscriptions.
+    Output: white text, black background.
+    """
+    gray = _to_gray(img)
+    median = cv2.medianBlur(gray, 13)
+    _, binary = cv2.threshold(median, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, np.ones((2, 2), np.uint8))
+    binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, np.ones((2, 2), np.uint8))
+    if binary.mean() >= 127:
+        binary = cv2.bitwise_not(binary)
+    return binary
 def binarise(
     img_path: str,
     output_path: str,
@@ -531,7 +560,9 @@ def binarise(
     doc_type = detect_document_type(img)
 
     if method == "sauvola":
-        if doc_type == "palm_leaf":
+        if detect_rubbing(img):
+            binary = binarise_rubbing(img)
+        elif doc_type == "palm_leaf":
             binary = binarise_palm_leaf(img)
         else:
             binary = binarise_stone(img)
