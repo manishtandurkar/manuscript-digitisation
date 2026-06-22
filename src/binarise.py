@@ -322,17 +322,17 @@ def binarise_adaptive(img: np.ndarray) -> np.ndarray:
 
 def binarise_stone(img: np.ndarray) -> np.ndarray:
     """
-    Stone inscription binarisation via Frangi vesselness on upscaled white-hat.
+    Stone inscription binarisation via Frangi vesselness.
 
-    1. Upscale small images 3× (LANCZOS4) so thin carved strokes (~3px) become
-       thick enough (~9px) to distinguish from 1-2px grain noise.
-    2. White-hat morphology lifts bright carved text above dark stone background.
-    3. Frangi vesselness filter detects elongated stroke-like structures and
-       suppresses round grain blobs.
-    4. Median blur removes salt-pepper peaks in the Frangi response.
-    5. Threshold at p88 (top 12% of Frangi response) — text strokes dominate.
-    6. Morphological cleanup + noise blob removal.
-    7. Downscale result back to the original image dimensions.
+    Handles two polarities automatically:
+    - Dark background / light text (typical carved stone):
+        white-hat lifts bright strokes, Frangi detects them.
+    - Light background / dark text (outdoor photograph, weathered stone):
+        CLAHE + invert + vegetation mask (low-saturation pixels) + Frangi
+        detects inverted dark strokes.
+
+    Small images (shorter < 400px) are upscaled 3× so thin strokes survive
+    the outer noise-removal pass in binarise() which uses min_length=25.
     Output: white text, black background.
     """
     try:
@@ -344,41 +344,82 @@ def binarise_stone(img: np.ndarray) -> np.ndarray:
     gray = _to_gray(img)
     H0, W0 = gray.shape
     shorter0 = min(H0, W0)
+    gray_mean = float(gray.mean())
+    gray_std  = float(gray.std())
 
-    # Upscale small images so stroke width >> grain width
-    scale = 3 if shorter0 < 400 else (2 if shorter0 < 800 else 1)
-    if scale > 1:
-        gray_up = cv2.resize(gray, (W0 * scale, H0 * scale),
-                             interpolation=cv2.INTER_LANCZOS4)
+    # ── Polarity detection ───────────────────────────────────────────────────
+    # mean > 128 → bright stone background, dark carved text → invert path
+    bright_bg = gray_mean > 128
+
+    if bright_bg:
+        # Outdoor / bright-stone path: mask vegetation, invert, Frangi on gray
+        scale = 3 if shorter0 < 400 else (2 if shorter0 < 800 else 1)
+        if scale > 1:
+            gray_work = cv2.resize(gray, (W0 * scale, H0 * scale),
+                                   interpolation=cv2.INTER_LANCZOS4)
+            img_work = cv2.resize(img, (W0 * scale, H0 * scale),
+                                  interpolation=cv2.INTER_LANCZOS4) if img.ndim == 3 else gray_work
+        else:
+            gray_work = gray
+            img_work = img
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        gray_eq = clahe.apply(gray_work)
+        # Vegetation mask: greenish/coloured pixels are not stone
+        if img_work.ndim == 3:
+            hsv = cv2.cvtColor(img_work, cv2.COLOR_BGR2HSV)
+            sat, val = hsv[:, :, 1], hsv[:, :, 2]
+            stone_mask = ((sat < 60) & (val > 60)).astype(np.uint8) * 255
+            stone_mask = cv2.dilate(stone_mask, np.ones((15, 15), np.uint8))
+        else:
+            stone_mask = np.full(gray_eq.shape, 255, dtype=np.uint8)
+        gray_inv = cv2.bitwise_not(gray_eq)
+        gray_inv[stone_mask == 0] = 0
+        frangi_input = gray_inv.astype(np.float32) / 255.0
+        frangi_sigmas = range(2, 10)
+        gray_up = gray_inv
     else:
-        gray_up = gray
+        # Dark-stone path: upscale small images, white-hat, Frangi
+        scale = 3 if shorter0 < 400 else (2 if shorter0 < 800 else 1)
+        if scale > 1:
+            gray_up = cv2.resize(gray, (W0 * scale, H0 * scale),
+                                 interpolation=cv2.INTER_LANCZOS4)
+        else:
+            gray_up = gray
+        H, W = gray_up.shape
+        shorter = min(H, W)
+        wh_k = max(21, shorter // 6)
+        if wh_k % 2 == 0:
+            wh_k += 1
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (wh_k, wh_k))
+        wh = cv2.morphologyEx(gray_up, cv2.MORPH_TOPHAT, kernel)
+        wh = cv2.normalize(wh, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+        frangi_input = wh.astype(np.float32) / 255.0
+        frangi_sigmas = range(1, 7)
+        stone_mask = None
+
     H, W = gray_up.shape
     shorter = min(H, W)
 
-    # White-hat: isolate bright carved text from dark stone background
-    wh_k = max(21, shorter // 6)
-    if wh_k % 2 == 0:
-        wh_k += 1
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (wh_k, wh_k))
-    wh = cv2.morphologyEx(gray_up, cv2.MORPH_TOPHAT, kernel)
-    wh = cv2.normalize(wh, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
-
-    # Frangi vesselness: responds strongly to elongated strokes, weakly to grain
-    wh_f32 = wh.astype(np.float32) / 255.0
-    vessel = frangi(wh_f32, sigmas=range(1, 7), black_ridges=False)
+    # ── Frangi vesselness ────────────────────────────────────────────────────
+    vessel = frangi(frangi_input, sigmas=frangi_sigmas, black_ridges=False)
     vn = cv2.normalize(vessel, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
     vn = cv2.medianBlur(vn, 3)
 
-    # Adaptive percentile threshold: low-contrast images need a lower cutoff to
-    # capture faint strokes; high-contrast images can afford a stricter cut.
-    # std < 50 (faint carvings) → p83; std > 70 (deep carvings) → p88.
-    gray_std = float(gray.std())
+    # Adaptive percentile: low-contrast → p83; high-contrast → p88
     t_pct = int(np.clip(88 - max(0.0, (65 - gray_std) * 0.25), 83, 88))
+    # Bright-bg outdoor images tend to have more background noise → be stricter
+    if bright_bg:
+        t_pct = max(t_pct, 83)
     t_frangi = int(np.percentile(vn, t_pct))
-    LOGGER.debug("binarise_stone: gray_std=%.1f → t_pct=%d", gray_std, t_pct)
+    LOGGER.debug("binarise_stone: mean=%.1f std=%.1f bright_bg=%s t_pct=%d",
+                 gray_mean, gray_std, bright_bg, t_pct)
     binary = (vn > t_frangi).astype(np.uint8) * 255
 
-    # Morphological cleanup scaled to image size
+    # Re-apply vegetation mask on output if used
+    if bright_bg and stone_mask is not None:
+        binary[stone_mask == 0] = 0
+
+    # ── Morphological cleanup ────────────────────────────────────────────────
     close_k = max(3, shorter // 150)
     binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE,
                               np.ones((close_k, close_k), np.uint8))
@@ -386,17 +427,12 @@ def binarise_stone(img: np.ndarray) -> np.ndarray:
     binary = remove_noise_blobs(binary,
                                 min_size=min_size,
                                 min_length=max(5, shorter // 60))
-
-    # Stroke-merge close: join nearby fragment ends into character-sized components
-    # so they survive the outer binarise() noise-removal (min_size=80, min_length=25).
-    # Kernel ~1/60 of shorter side merges within-character gaps without joining
-    # adjacent characters.
-    merge_k = max(3, shorter // 60)
+    # Base merge_k on original (pre-upscale) shorter side so it stays proportional
+    # regardless of whether upscaling was applied.
+    merge_k = max(3, shorter0 // 120)
     binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE,
                               np.ones((merge_k, merge_k), np.uint8))
 
-    # Return at upscaled resolution so character components (max_dim ~36px at 3×)
-    # survive the outer noise-removal pass in binarise() which uses min_length=25.
     if binary.mean() >= 127:
         binary = cv2.bitwise_not(binary)
     return binary
