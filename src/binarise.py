@@ -695,6 +695,10 @@ def binarise(
     if method == "sauvola":
         if doc_type == "palm_leaf":
             binary = binarise_palm_leaf(img)
+        elif _to_gray(img).mean() > 128:
+            # Bright-background stone (outdoor photo, light stone with dark text).
+            # Rubbings are always dark-bg so skip detect_rubbing for bright images.
+            binary = binarise_stone(img)
         elif detect_rubbing(img):
             binary = binarise_rubbing(img)
         else:
