@@ -126,17 +126,21 @@ export default function App() {
           </div>
         )}
 
+        {/* Sticky stage panel (gallery only, when images selected) */}
+        {view === "gallery" && selected.size > 0 && (
+          <div className="px-6 pt-4 flex-shrink-0">
+            <StagePanel
+              selectedCount={selected.size}
+              onRun={handleRun}
+              isRunning={isRunning}
+            />
+          </div>
+        )}
+
         {/* Scrollable content */}
         <main className="flex-1 overflow-y-auto">
           {view === "gallery" && (
             <div className="p-6 space-y-4">
-              {selected.size > 0 && (
-                <StagePanel
-                  selectedCount={selected.size}
-                  onRun={handleRun}
-                  isRunning={isRunning}
-                />
-              )}
               <ImageGrid selected={selected} onSelectionChange={setSelected} />
             </div>
           )}

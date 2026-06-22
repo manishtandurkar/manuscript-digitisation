@@ -36,6 +36,10 @@ app.add_middleware(
 if DATA_DIR.exists():
     app.mount("/data", StaticFiles(directory=str(DATA_DIR)), name="data")
 
+_TEST_OUTPUT_DIR = _PROJECT_ROOT / "test_output"
+if _TEST_OUTPUT_DIR.exists():
+    app.mount("/test_output", StaticFiles(directory=str(_TEST_OUTPUT_DIR)), name="test_output")
+
 
 @app.get("/api/images", response_model=list[ImageMeta])
 def list_images() -> list[ImageMeta]:

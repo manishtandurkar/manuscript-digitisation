@@ -378,48 +378,111 @@ def binarise_stone(img: np.ndarray) -> np.ndarray:
         best = cv2.bitwise_not(best)
     return best
 
-def binarise_palm_leaf(img: np.ndarray) -> np.ndarray:
+def _palm_leaf_rough_mask(img: np.ndarray) -> np.ndarray:
     """
-    Palm-leaf manuscript binarisation.
+    Fast rough binary mask used to locate character regions on palm-leaf images.
+    R-channel + bilateral + CLAHE + Sauvola. Not the final output — used only
+    as a segmentation guide for binarise_palm_leaf.
+    """
+    from skimage.filters import threshold_sauvola
 
-    Uses adaptive Gaussian thresholding on raw gray (no CLAHE — destroys fibre contrast).
-    Block size and C are derived from image resolution and contrast stats.
-    Output: white text, black background.
-    """
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    h, w = gray.shape
+    h, w = img.shape[:2]
     shorter = min(h, w)
-
-    # Adaptive block size: ~1/15 of shorter side, must be odd, clamped [21, 51]
-    block = max(21, min(51, (shorter // 15) | 1))
-    if block % 2 == 0:
-        block += 1
-
-    # C offset: higher for low-contrast leaves (faded ink)
-    stats = _image_stats(gray)
-    C = 8 if stats["std"] > 30 else 12
-
-    binary = cv2.adaptiveThreshold(
-        gray, 255,
-        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-        cv2.THRESH_BINARY_INV,
-        block, C
-    )
-
-    # Flood-fill corners to remove edge border noise
+    r = img[:, :, 2]
+    sigma_s = max(5, shorter // 30)
+    denoised = cv2.bilateralFilter(r, d=9, sigmaColor=30, sigmaSpace=sigma_s)
+    enhanced = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(denoised)
+    ws = max(21, min(61, (shorter // 8) | 1))
+    if ws % 2 == 0:
+        ws += 1
+    thresh = threshold_sauvola(enhanced, window_size=ws, k=0.18)
+    binary = (enhanced < thresh).astype(np.uint8) * 255
     mask = np.zeros((h + 2, w + 2), np.uint8)
     for corner in [(0, 0), (0, w - 1), (h - 1, 0), (h - 1, w - 1)]:
         cv2.floodFill(binary, mask, (corner[1], corner[0]), 0)
+    binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
+    min_size = max(15, (shorter // 120) ** 2)
+    return remove_noise_blobs(binary, min_size=min_size, min_length=max(8, shorter // 80))
 
-    # Fine close (2×2) preserves thin ink strokes on fibre background
-    binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, np.ones((2, 2), np.uint8))
 
-    # Open slightly to disconnect fibre noise from strokes
-    open_k = max(1, shorter // 800)
-    if open_k > 1:
-        binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, np.ones((open_k, open_k), np.uint8))
+def binarise_palm_leaf(img: np.ndarray) -> np.ndarray:
+    """
+    Palm-leaf manuscript binarisation via character-level segmentation.
 
-    return binary
+    1. Produce a rough binary mask (R-channel + bilateral + Sauvola) to locate
+       character regions.
+    2. Dilate mask to merge nearby strokes into whole-character blobs.
+    3. Find connected components — each is one character or ligature cluster.
+    4. For each component: crop the same region from the original colour image,
+       apply a tight local Sauvola threshold on the R-channel of that crop.
+    5. Stamp each locally-binarised crop onto a black canvas.
+
+    Per-character local thresholding eliminates background bleed that global
+    methods miss, since each small crop has near-uniform local illumination.
+    Output: white text, black background.
+    """
+    from skimage.filters import threshold_sauvola
+
+    H, W = img.shape[:2]
+    shorter = min(H, W)
+
+    # Step 1: rough mask for segmentation guidance
+    rough = _palm_leaf_rough_mask(img)
+
+    # Step 2: dilate to merge intra-character stroke gaps
+    dil_k = max(3, shorter // 40)
+    dilated = cv2.dilate(rough, np.ones((dil_k, dil_k), np.uint8))
+
+    # Step 3: connected components
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(dilated, connectivity=8)
+
+    min_area = max(20, (shorter // 60) ** 2)
+    max_area = int(H * W * 0.40)
+    pad = max(2, shorter // 80)
+    canvas = np.zeros((H, W), dtype=np.uint8)
+
+    for label in range(1, num_labels):
+        area = int(stats[label, cv2.CC_STAT_AREA])
+        if area < min_area or area > max_area:
+            continue
+
+        x  = int(stats[label, cv2.CC_STAT_LEFT])
+        y  = int(stats[label, cv2.CC_STAT_TOP])
+        cw = int(stats[label, cv2.CC_STAT_WIDTH])
+        ch = int(stats[label, cv2.CC_STAT_HEIGHT])
+
+        x0 = max(0, x - pad);  y0 = max(0, y - pad)
+        x1 = min(W, x + cw + pad); y1 = min(H, y + ch + pad)
+
+        crop = img[y0:y1, x0:x1]
+        if crop.size == 0:
+            continue
+
+        # Step 4: local binarisation on the R-channel crop
+        r_crop = crop[:, :, 2]
+        cr_h, cr_w = r_crop.shape
+        if cr_h < 10 or cr_w < 10:
+            _, local_bin = cv2.threshold(r_crop, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+        else:
+            ws = max(7, min(31, (min(cr_h, cr_w) // 3) | 1))
+            if ws % 2 == 0:
+                ws += 1
+            thresh = threshold_sauvola(r_crop, window_size=ws, k=0.15)
+            local_bin = (r_crop < thresh).astype(np.uint8) * 255
+
+        # Step 5: stamp onto canvas
+        canvas[y0:y1, x0:x1] = np.maximum(canvas[y0:y1, x0:x1], local_bin)
+
+    # Final cleanup
+    canvas = cv2.morphologyEx(canvas, cv2.MORPH_CLOSE, np.ones((2, 2), np.uint8))
+    canvas = remove_noise_blobs(
+        canvas,
+        min_size=max(10, (shorter // 150) ** 2),
+        min_length=max(5, shorter // 100),
+    )
+    if canvas.mean() >= 127:
+        canvas = cv2.bitwise_not(canvas)
+    return canvas
 
 
 # ─── DL methods (public) ─────────────────────────────────────────────────────
@@ -560,10 +623,10 @@ def binarise(
     doc_type = detect_document_type(img)
 
     if method == "sauvola":
-        if detect_rubbing(img):
-            binary = binarise_rubbing(img)
-        elif doc_type == "palm_leaf":
+        if doc_type == "palm_leaf":
             binary = binarise_palm_leaf(img)
+        elif detect_rubbing(img):
+            binary = binarise_rubbing(img)
         else:
             binary = binarise_stone(img)
     elif method == "otsu":
