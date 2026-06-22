@@ -382,15 +382,9 @@ def binarise_stone(img: np.ndarray) -> np.ndarray:
                                 min_size=min_size,
                                 min_length=max(5, shorter // 60))
 
-    # Downscale back to original dimensions
-    if scale > 1:
-        binary = cv2.resize(binary, (W0, H0), interpolation=cv2.INTER_AREA)
-        _, binary = cv2.threshold(binary, 127, 255, cv2.THRESH_BINARY)
-        # Dilate slightly at original scale so stroke components are large enough
-        # (≥80px) to survive the outer noise-removal pass in binarise()
-        dil_k = max(2, shorter0 // 50)
-        binary = cv2.dilate(binary, np.ones((dil_k, dil_k), np.uint8))
-
+    # Return at upscaled resolution so character components (max_dim ~36px at 3×)
+    # survive the outer noise-removal pass in binarise() which uses min_length=25.
+    # At original scale (122px), characters are only ~12px — below that threshold.
     if binary.mean() >= 127:
         binary = cv2.bitwise_not(binary)
     return binary
