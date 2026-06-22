@@ -369,9 +369,14 @@ def binarise_stone(img: np.ndarray) -> np.ndarray:
     vn = cv2.normalize(vessel, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
     vn = cv2.medianBlur(vn, 3)
 
-    # Threshold at p88 — keeps top 12%, dominated by text strokes
-    t88 = int(np.percentile(vn, 88))
-    binary = (vn > t88).astype(np.uint8) * 255
+    # Adaptive percentile threshold: low-contrast images need a lower cutoff to
+    # capture faint strokes; high-contrast images can afford a stricter cut.
+    # std < 50 (faint carvings) → p83; std > 70 (deep carvings) → p88.
+    gray_std = float(gray.std())
+    t_pct = int(np.clip(88 - max(0.0, (65 - gray_std) * 0.25), 83, 88))
+    t_frangi = int(np.percentile(vn, t_pct))
+    LOGGER.debug("binarise_stone: gray_std=%.1f → t_pct=%d", gray_std, t_pct)
+    binary = (vn > t_frangi).astype(np.uint8) * 255
 
     # Morphological cleanup scaled to image size
     close_k = max(3, shorter // 150)
