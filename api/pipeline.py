@@ -154,10 +154,12 @@ def _run_binarise(image_id: str, method: str = "sauvola") -> dict:
     if doc_type == "palm_leaf":
         src_path = raw_path
     else:
-        enhanced_candidates = sorted(ENHANCED_DIR.glob(f"{stem}_enhanced_*.jpg"))
+        # Only superres-enhanced images are valid binarisation inputs;
+        # DStretch recolours the image in a way that breaks binarisation.
+        superres_candidates = sorted(ENHANCED_DIR.glob(f"{stem}_enhanced_superres*.jpg"))
         preprocessed = PREPROCESSED_DIR / f"{stem}_preprocessed.jpg"
-        if enhanced_candidates:
-            src_path = enhanced_candidates[-1]
+        if superres_candidates:
+            src_path = superres_candidates[-1]
         elif preprocessed.exists():
             src_path = preprocessed
         else:
