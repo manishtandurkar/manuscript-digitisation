@@ -322,61 +322,78 @@ def binarise_adaptive(img: np.ndarray) -> np.ndarray:
 
 def binarise_stone(img: np.ndarray) -> np.ndarray:
     """
-    Stone inscription binarisation - adaptive multi-path.
+    Stone inscription binarisation via Frangi vesselness on upscaled white-hat.
 
-    Path A (black-hat): deep carvings with strong shadow contrast.
-    Path B (CLAHE + adaptive Sauvola): shallow/faint/weathered carvings.
-    Path C (median-blur + Otsu): rubbings/estampages with speckled grain noise.
-    Selection: whichever path produces more large connected components.
+    1. Upscale small images 3× (LANCZOS4) so thin carved strokes (~3px) become
+       thick enough (~9px) to distinguish from 1-2px grain noise.
+    2. White-hat morphology lifts bright carved text above dark stone background.
+    3. Frangi vesselness filter detects elongated stroke-like structures and
+       suppresses round grain blobs.
+    4. Median blur removes salt-pepper peaks in the Frangi response.
+    5. Threshold at p88 (top 12% of Frangi response) — text strokes dominate.
+    6. Morphological cleanup + noise blob removal.
+    7. Downscale result back to the original image dimensions.
+    Output: white text, black background.
     """
+    try:
+        from skimage.filters import frangi
+    except ImportError:
+        LOGGER.warning("scikit-image frangi not available — falling back to Sauvola")
+        return binarise_sauvola(img)
+
     gray = _to_gray(img)
-    h, w = gray.shape
-    shorter = min(h, w)
+    H0, W0 = gray.shape
+    shorter0 = min(H0, W0)
 
-    close_k = max(3, shorter // 300)
-    open_k  = max(2, shorter // 500)
+    # Upscale small images so stroke width >> grain width
+    scale = 3 if shorter0 < 400 else (2 if shorter0 < 800 else 1)
+    if scale > 1:
+        gray_up = cv2.resize(gray, (W0 * scale, H0 * scale),
+                             interpolation=cv2.INTER_LANCZOS4)
+    else:
+        gray_up = gray
+    H, W = gray_up.shape
+    shorter = min(H, W)
 
-    smooth_a = cv2.GaussianBlur(gray, (0, 0), sigmaX=2, sigmaY=2)
-    bh_k = max(21, shorter // 12)
-    if bh_k % 2 == 0:
-        bh_k += 1
-    kernel_bh = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (bh_k, bh_k))
-    black_hat = cv2.morphologyEx(smooth_a, cv2.MORPH_BLACKHAT, kernel_bh)
-    black_hat = cv2.normalize(black_hat, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
-    stats = _image_stats(gray)
-    pct = 65 if stats["std"] > 35 else 75
-    thresh_val = max(int(np.percentile(black_hat, pct)), 15)
-    _, binary_a = cv2.threshold(black_hat, thresh_val, 255, cv2.THRESH_BINARY)
-    binary_a = cv2.morphologyEx(binary_a, cv2.MORPH_OPEN,  np.ones((open_k, open_k), np.uint8))
-    binary_a = cv2.morphologyEx(binary_a, cv2.MORPH_CLOSE, np.ones((close_k, close_k), np.uint8))
+    # White-hat: isolate bright carved text from dark stone background
+    wh_k = max(21, shorter // 6)
+    if wh_k % 2 == 0:
+        wh_k += 1
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (wh_k, wh_k))
+    wh = cv2.morphologyEx(gray_up, cv2.MORPH_TOPHAT, kernel)
+    wh = cv2.normalize(wh, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
 
-    from skimage.filters import threshold_sauvola
-    smooth_b = cv2.GaussianBlur(gray, (0, 0), sigmaX=1.5, sigmaY=1.5)
-    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
-    eq = clahe.apply(smooth_b)
-    ws, k = _adaptive_sauvola_params(eq)
-    thresh_s = threshold_sauvola(eq, window_size=ws, k=k)
-    binary_b = (eq < thresh_s).astype(np.uint8) * 255
-    binary_b = cv2.morphologyEx(binary_b, cv2.MORPH_OPEN,  np.ones((open_k, open_k), np.uint8))
-    binary_b = cv2.morphologyEx(binary_b, cv2.MORPH_CLOSE, np.ones((close_k, close_k), np.uint8))
+    # Frangi vesselness: responds strongly to elongated strokes, weakly to grain
+    wh_f32 = wh.astype(np.float32) / 255.0
+    vessel = frangi(wh_f32, sigmas=range(1, 7), black_ridges=False)
+    vn = cv2.normalize(vessel, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+    vn = cv2.medianBlur(vn, 3)
 
-    median_c = cv2.medianBlur(gray, 13)
-    _, binary_c = cv2.threshold(median_c, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    binary_c = cv2.morphologyEx(binary_c, cv2.MORPH_OPEN, np.ones((2, 2), np.uint8))
-    binary_c = cv2.morphologyEx(binary_c, cv2.MORPH_CLOSE, np.ones((2, 2), np.uint8))
+    # Threshold at p88 — keeps top 12%, dominated by text strokes
+    t88 = int(np.percentile(vn, 88))
+    binary = (vn > t88).astype(np.uint8) * 255
 
-    def _count_large(bin_img: np.ndarray) -> int:
-        min_area = max(50, (shorter // 100) ** 2)
-        n, _, stats_cc, _ = cv2.connectedComponentsWithStats(bin_img, connectivity=8)
-        return sum(1 for i in range(1, n) if stats_cc[i, cv2.CC_STAT_AREA] >= min_area)
+    # Morphological cleanup scaled to image size
+    close_k = max(3, shorter // 150)
+    binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE,
+                              np.ones((close_k, close_k), np.uint8))
+    min_size = max(12, (shorter // 80) ** 2)
+    binary = remove_noise_blobs(binary,
+                                min_size=min_size,
+                                min_length=max(5, shorter // 60))
 
-    scores = [_count_large(b) for b in (binary_a, binary_b, binary_c)]
-    best   = [binary_a, binary_b, binary_c][scores.index(max(scores))]
-    LOGGER.debug("stone paths scores A=%d B=%d C=%d", *scores)
+    # Downscale back to original dimensions
+    if scale > 1:
+        binary = cv2.resize(binary, (W0, H0), interpolation=cv2.INTER_AREA)
+        _, binary = cv2.threshold(binary, 127, 255, cv2.THRESH_BINARY)
+        # Dilate slightly at original scale so stroke components are large enough
+        # (≥80px) to survive the outer noise-removal pass in binarise()
+        dil_k = max(2, shorter0 // 50)
+        binary = cv2.dilate(binary, np.ones((dil_k, dil_k), np.uint8))
 
-    if best.mean() >= 127:
-        best = cv2.bitwise_not(best)
-    return best
+    if binary.mean() >= 127:
+        binary = cv2.bitwise_not(binary)
+    return binary
 
 def _palm_leaf_rough_mask(img: np.ndarray) -> np.ndarray:
     """
