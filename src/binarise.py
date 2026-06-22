@@ -382,9 +382,16 @@ def binarise_stone(img: np.ndarray) -> np.ndarray:
                                 min_size=min_size,
                                 min_length=max(5, shorter // 60))
 
+    # Stroke-merge close: join nearby fragment ends into character-sized components
+    # so they survive the outer binarise() noise-removal (min_size=80, min_length=25).
+    # Kernel ~1/60 of shorter side merges within-character gaps without joining
+    # adjacent characters.
+    merge_k = max(3, shorter // 60)
+    binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE,
+                              np.ones((merge_k, merge_k), np.uint8))
+
     # Return at upscaled resolution so character components (max_dim ~36px at 3×)
     # survive the outer noise-removal pass in binarise() which uses min_length=25.
-    # At original scale (122px), characters are only ~12px — below that threshold.
     if binary.mean() >= 127:
         binary = cv2.bitwise_not(binary)
     return binary
