@@ -364,12 +364,22 @@ def binarise_stone(img: np.ndarray) -> np.ndarray:
             img_work = img
         clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
         gray_eq = clahe.apply(gray_work)
-        # Vegetation mask: greenish/coloured pixels are not stone
+        # Stone isolation: background is dark (val<80) OR highly saturated (sat>80,
+        # i.e. green vegetation). Find the largest connected non-background region.
         if img_work.ndim == 3:
             hsv = cv2.cvtColor(img_work, cv2.COLOR_BGR2HSV)
-            sat, val = hsv[:, :, 1], hsv[:, :, 2]
-            stone_mask = ((sat < 60) & (val > 60)).astype(np.uint8) * 255
-            stone_mask = cv2.dilate(stone_mask, np.ones((15, 15), np.uint8))
+            sat_ch, val_ch = hsv[:, :, 1], hsv[:, :, 2]
+            bg = ((val_ch < 80) | (sat_ch > 80)).astype(np.uint8) * 255
+            bg = cv2.morphologyEx(bg, cv2.MORPH_CLOSE, np.ones((15, 15), np.uint8))
+            not_bg = cv2.bitwise_not(bg)
+            not_bg = cv2.morphologyEx(not_bg, cv2.MORPH_CLOSE, np.ones((25, 25), np.uint8))
+            n_cc, lbl, cc_stats, _ = cv2.connectedComponentsWithStats(not_bg, connectivity=8)
+            stone_mask = np.zeros(gray_eq.shape, dtype=np.uint8)
+            min_stone = int(gray_work.shape[0] * gray_work.shape[1] * 0.05)
+            for ci in range(1, n_cc):
+                if cc_stats[ci, cv2.CC_STAT_AREA] >= min_stone:
+                    stone_mask[lbl == ci] = 255
+            stone_mask = cv2.dilate(stone_mask, np.ones((20, 20), np.uint8))
         else:
             stone_mask = np.full(gray_eq.shape, 255, dtype=np.uint8)
         gray_inv = cv2.bitwise_not(gray_eq)
@@ -407,16 +417,17 @@ def binarise_stone(img: np.ndarray) -> np.ndarray:
 
     # Adaptive percentile: low-contrast → p83; high-contrast → p88
     t_pct = int(np.clip(88 - max(0.0, (65 - gray_std) * 0.25), 83, 88))
-    # Bright-bg outdoor images tend to have more background noise → be stricter
-    if bright_bg:
-        t_pct = max(t_pct, 83)
-    t_frangi = int(np.percentile(vn, t_pct))
-    LOGGER.debug("binarise_stone: mean=%.1f std=%.1f bright_bg=%s t_pct=%d",
-                 gray_mean, gray_std, bright_bg, t_pct)
+    # Compute percentile only over stone pixels to avoid zero-padding bias
+    if stone_mask is not None:
+        vn_stone = vn[stone_mask > 0]
+        t_frangi = int(np.percentile(vn_stone, t_pct)) if vn_stone.size else 0
+        vn[stone_mask == 0] = 0
+    else:
+        t_frangi = int(np.percentile(vn, t_pct))
+    LOGGER.debug("binarise_stone: mean=%.1f std=%.1f bright_bg=%s t_pct=%d t=%d",
+                 gray_mean, gray_std, bright_bg, t_pct, t_frangi)
     binary = (vn > t_frangi).astype(np.uint8) * 255
-
-    # Re-apply vegetation mask on output if used
-    if bright_bg and stone_mask is not None:
+    if stone_mask is not None:
         binary[stone_mask == 0] = 0
 
     # ── Morphological cleanup ────────────────────────────────────────────────
