@@ -10,8 +10,10 @@ const ALL_STAGES: { id: StageName; label: string }[] = [
 ];
 
 const ENHANCE_MODES: { value: string; label: string; description: string }[] = [
-  { value: "dstretch",  label: "DStretch",  description: "Fast · decorrelation stretch, reveals faded pigment" },
-  { value: "superres",  label: "Super-res", description: "Slow · Real-ESRGAN 4× upscale (CPU: ~1–3 min/image)" },
+  { value: "mild",      label: "Mild (Fast)", description: "Fast · denoise + sharpen only (instant)" },
+  { value: "dstretch",  label: "DStretch",    description: "Fast · decorrelation stretch, reveals faded pigment" },
+  { value: "superres",  label: "Super-res",   description: "Slow · Real-ESRGAN 4× upscale (CPU: ~1–3 min/image)" },
+  { value: "auto",      label: "Auto",        description: "Automatic routing based on resolution and contrast" },
 ];
 
 const BINARISE_METHODS: { value: string; label: string; description: string }[] = [
@@ -31,7 +33,7 @@ export default function StagePanel({ selectedCount, onRun, isRunning }: Props) {
     new Set(["preprocess"])
   );
   const [binariseMethod, setBinariseMethod] = useState("sauvola");
-  const [enhanceMode, setEnhanceMode] = useState("dstretch");
+  const [enhanceMode, setEnhanceMode] = useState("mild");
 
   if (selectedCount === 0) return null;
 

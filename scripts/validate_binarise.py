@@ -72,7 +72,7 @@ def main():
         # 3. Detect document type on preprocessed image
         pre_img = cv2.imread(str(pre_out))
         if pre_img is not None:
-            doc_type = detect_document_type(pre_img)
+            doc_type = detect_document_type(pre_img, img_path=pre_out)
             LOGGER.info("Detected document type: %s", doc_type)
         else:
             doc_type = "unknown"

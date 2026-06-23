@@ -132,7 +132,7 @@ def enhance(
     if img is None:
         raise FileNotFoundError(f"Cannot read image: {img_path}")
 
-    doc_type = detect_document_type(img)
+    doc_type = detect_document_type(img, img_path=img_path)
     h, w = img.shape[:2]
     is_already_high_contrast = (
         doc_type == "stone"

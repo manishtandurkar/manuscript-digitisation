@@ -63,7 +63,7 @@ def main():
         # Reload resized original and enhanced image
         orig_img = cv2.imread(str(resized_raw_path))
         enh_img = cv2.imread(str(enh_out))
-        doc_type = detect_document_type(orig_img)
+        doc_type = detect_document_type(orig_img, img_path=img_path)
 
         # 4. Binarise using sauvola, otsu, adaptive
         methods = ["sauvola", "otsu", "adaptive"]

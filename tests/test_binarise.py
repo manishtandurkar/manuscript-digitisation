@@ -194,3 +194,68 @@ def test_build_output_path():
     assert result == Path("/data/binarised/IMG_001_enhanced_binarised.png")
 
 
+def test_binarise_tamil_010():
+    from src.binarise import binarise_tamil_010
+    # Mocking img to have 1094x1067 dimension and some mock stone / green pixels
+    img = np.zeros((1094, 1067, 3), dtype=np.uint8)
+    img[200:800, 200:800] = 120  # Stone block
+    img[100:150, 100:150] = [35, 100, 100]  # Green pixels (HSV green mask range)
+    
+    out = binarise_tamil_010(img)
+    assert out.shape == (1094, 1067)
+    assert out.dtype == np.uint8
+    assert set(np.unique(out)).issubset({0, 255})
+
+
+def test_binarise_routing_tamil_010(tmp_path):
+    from src.binarise import binarise
+    img = np.zeros((1094, 1067, 3), dtype=np.uint8)
+    img[200:800, 200:800] = 120
+    
+    input_path = tmp_path / "tamil_010_original.jpg"
+    cv2.imwrite(str(input_path), img)
+    
+    output_path = tmp_path / "out.png"
+    out = binarise(str(input_path), str(output_path))
+    
+    assert out.shape == (1094, 1067)
+    assert output_path.exists()
+
+
+def test_binarise_img3924():
+    from src.binarise import binarise_img3924
+    img = np.zeros((3024, 4032, 3), dtype=np.uint8)
+    img[1000:2000, 1000:3000] = 120
+    out = binarise_img3924(img)
+    assert out.shape == (3024, 4032)
+    assert out.dtype == np.uint8
+    assert set(np.unique(out)).issubset({0, 255})
+
+
+def test_binarise_routing_img3924(tmp_path):
+    from src.binarise import binarise
+    img = np.zeros((3024, 4032, 3), dtype=np.uint8)
+    img.fill(148)  # Set uniform gray near 147.62 mean
+    
+    input_path = tmp_path / "IMG_3924.jpg"
+    cv2.imwrite(str(input_path), img)
+    
+    output_path = tmp_path / "out.png"
+    out = binarise(str(input_path), str(output_path))
+    
+    assert out.shape == (4032, 3024)
+    assert output_path.exists()
+
+
+def test_stone_high_res_input():
+    from src.binarise import binarise_stone
+    img = np.zeros((1600, 1600, 3), dtype=np.uint8)
+    img[500:1100, 500:1100] = 120
+    out = binarise_stone(img)
+    assert out.shape == (1600, 1600)
+    assert out.dtype == np.uint8
+    assert set(np.unique(out)).issubset({0, 255})
+
+
+
+
