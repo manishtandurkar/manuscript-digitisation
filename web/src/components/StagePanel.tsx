@@ -5,8 +5,6 @@ const ALL_STAGES: { id: StageName; label: string }[] = [
   { id: "preprocess", label: "Preprocess" },
   { id: "enhance",    label: "Enhance (Super-res)" },
   { id: "binarise",   label: "Binarise" },
-  { id: "ocr",        label: "OCR / Transcribe" },
-  { id: "translate",  label: "Translate" },
 ];
 
 const ENHANCE_MODES: { value: string; label: string; description: string }[] = [
