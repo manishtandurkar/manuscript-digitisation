@@ -102,3 +102,15 @@ logs/
 .claude/
 data/
 .venv/
+
+# Generated debug/tuning outputs
+check_image/
+cluster_output/
+palm_tune/
+rubbing_tune/
+rubbing_tune2/
+score_debug/
+stage_test/
+tests/palm_debug_outputs/
+tests/stage_test/
+all_images.txt
