@@ -149,7 +149,7 @@ def _run_binarise(image_id: str, method: str = "sauvola") -> dict:
 
     raw_path = _find_raw_path(image_id)
     raw_img = cv2.imread(str(raw_path)) if raw_path else None
-    doc_type = detect_document_type(raw_img) if raw_img is not None else "stone"
+    doc_type = detect_document_type(raw_img, img_path=raw_path) if raw_img is not None else "stone"
 
     if doc_type == "palm_leaf":
         src_path = raw_path

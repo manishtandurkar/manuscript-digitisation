@@ -84,57 +84,59 @@ export default function ImageGrid({ selected, onSelectionChange }: Props) {
 
   return (
     <div>
-      <div className="flex items-center gap-3 mb-4">
-        <input
-          type="text"
-          placeholder="Search by image or language…"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-100 placeholder-gray-500 focus:outline-none focus:border-indigo-500"
-        />
-        <button
-          onClick={selectAll}
-          className="text-sm text-indigo-400 hover:text-indigo-300 px-2"
-        >
-          Select all
-        </button>
-        <button
-          onClick={deselectAll}
-          className="text-sm text-gray-500 hover:text-gray-400 px-2"
-        >
-          Deselect all
-        </button>
-        {selected.size > 0 && (
-          <span className="text-sm text-indigo-300 font-medium">
-            {selected.size} selected
-          </span>
-        )}
-      </div>
-
-      <div className="flex flex-wrap gap-2 mb-5" aria-label="Language filters">
-        <button
-          onClick={() => setLanguage("All")}
-          className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
-            language === "All"
-              ? "bg-indigo-600 text-white border-indigo-500"
-              : "bg-gray-900 text-gray-400 border-gray-700 hover:text-gray-200 hover:border-gray-500"
-          }`}
-        >
-          All <span className="opacity-70">{allImages.length}</span>
-        </button>
-        {languages.map((item) => (
+      <div className="sticky top-0 -mt-6 pt-6 -mx-6 px-6 bg-gray-950/90 backdrop-blur-md z-10 pb-4 flex flex-col gap-3 border-b border-gray-900">
+        <div className="flex items-center gap-3">
+          <input
+            type="text"
+            placeholder="Search by image or language…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-100 placeholder-gray-500 focus:outline-none focus:border-indigo-500"
+          />
           <button
-            key={item.name}
-            onClick={() => setLanguage(item.name)}
+            onClick={selectAll}
+            className="text-sm text-indigo-400 hover:text-indigo-300 px-2 flex-shrink-0"
+          >
+            Select all
+          </button>
+          <button
+            onClick={deselectAll}
+            className="text-sm text-gray-500 hover:text-gray-400 px-2 flex-shrink-0"
+          >
+            Deselect all
+          </button>
+          {selected.size > 0 && (
+            <span className="text-sm text-indigo-300 font-medium flex-shrink-0">
+              {selected.size} selected
+            </span>
+          )}
+        </div>
+
+        <div className="flex flex-wrap gap-2" aria-label="Language filters">
+          <button
+            onClick={() => setLanguage("All")}
             className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
-              language === item.name
+              language === "All"
                 ? "bg-indigo-600 text-white border-indigo-500"
                 : "bg-gray-900 text-gray-400 border-gray-700 hover:text-gray-200 hover:border-gray-500"
             }`}
           >
-            {item.name} <span className="opacity-70">{item.count}</span>
+            All <span className="opacity-70">{allImages.length}</span>
           </button>
-        ))}
+          {languages.map((item) => (
+            <button
+              key={item.name}
+              onClick={() => setLanguage(item.name)}
+              className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
+                language === item.name
+                  ? "bg-indigo-600 text-white border-indigo-500"
+                  : "bg-gray-900 text-gray-400 border-gray-700 hover:text-gray-200 hover:border-gray-500"
+              }`}
+            >
+              {item.name} <span className="opacity-70">{item.count}</span>
+            </button>
+          ))}
+        </div>
       </div>
 
       <div className="space-y-7">
